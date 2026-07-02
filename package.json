@@ -1,0 +1,55 @@
+{
+  "name": "@vecteur/cli",
+  "version": "0.1.0",
+  "description": "Vecteur CLI — a thin client for the Vecteur space-engineering platform (login, ask, projects, files). Hosted brain; no IP ships.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Vecteur <hello@vecteur.space>",
+  "homepage": "https://vecteur.space",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vecteurspace/vecteur-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/vecteurspace/vecteur-cli/issues"
+  },
+  "keywords": [
+    "vecteur",
+    "space",
+    "space-systems",
+    "engineering",
+    "cli",
+    "agent",
+    "mcp"
+  ],
+  "bin": {
+    "vecteur": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -w -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.12",
+    "typescript": "^5.6.0"
+  }
+}
