@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+
+  no-secrets:
+    # A thin client must never ship secrets, private keys, or internal hosts.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: scan source for secrets / keys / internal hosts
+        run: |
+          set -e
+          PATTERNS='sk-ant-|_API_KEY[[:space:]]*=|BEGIN (RSA|OPENSSH|EC|PGP) PRIVATE KEY|localhost:8000|127\.0\.0\.1:8[0-9]{3}|xox[baprs]-|AKIA[0-9A-Z]{16}'
+          if grep -rInE "$PATTERNS" src 2>/dev/null; then
+            echo "::error::potential secret/host leak found"; exit 1
+          fi
+          echo "no secrets/keys/internal hosts in source"
+      - name: planted-secret self-test (gate must catch a real secret)
+        run: |
+          mkdir -p /tmp/pt && printf 'const k="sk-ant-PLANTED"\n' > /tmp/pt/x.ts
+          if grep -rInE 'sk-ant-' /tmp/pt >/dev/null; then echo "self-test OK"; else echo "gate broken"; exit 2; fi

@@ -1,0 +1,33 @@
+name: release
+
+# Publish @vecteur/cli to npm with provenance (OIDC) on a version tag.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write # required for npm provenance (SLSA) via GitHub OIDC
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      # tarball must contain ONLY compiled client + license/readme (no src, no secrets)
+      - name: verify pack contents
+        run: |
+          npm pack --dry-run 2>&1 | tee /tmp/pack.txt
+          if grep -qE '\.ts$|node_modules|scripts/' /tmp/pack.txt; then
+            echo "::error::tarball contains unexpected files"; exit 1
+          fi
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
