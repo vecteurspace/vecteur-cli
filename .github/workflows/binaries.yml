@@ -1,0 +1,62 @@
+name: binaries
+
+# Build standalone single-file binaries (no Node needed) for each OS/arch and attach them to
+# the GitHub release. Runs on a version tag, or manually via workflow_dispatch.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write # create/update the release + upload assets
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: oven-sh/setup-bun@v2
+      - run: npm ci
+      - run: npm run build # tsc -> dist/index.js (plain JS entry for Bun to compile)
+      - name: compile binaries
+        run: |
+          set -e
+          mkdir -p out
+          declare -A T=(
+            [linux-x64]=bun-linux-x64
+            [linux-arm64]=bun-linux-arm64
+            [macos-x64]=bun-darwin-x64
+            [macos-arm64]=bun-darwin-arm64
+            [windows-x64]=bun-windows-x64
+          )
+          for name in "${!T[@]}"; do
+            ext=""; [ "$name" = "windows-x64" ] && ext=".exe"
+            echo "building vecteur-$name$ext (${T[$name]})"
+            bun build dist/index.js --compile --target="${T[$name]}" --outfile "out/vecteur-$name$ext" \
+              || echo "::warning::failed to build $name (best-effort target)"
+          done
+          ls -la out/
+      - name: smoke-test the linux binary
+        run: |
+          chmod +x out/vecteur-linux-x64
+          ./out/vecteur-linux-x64 --version
+          ./out/vecteur-linux-x64 --help | head -3
+      - name: checksums
+        run: cd out && sha256sum vecteur-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/vecteur-*
+            out/SHA256SUMS.txt
+          tag_name: ${{ github.ref_name }}
+          fail_on_unmatched_files: false
+      - name: upload as workflow artifacts (for dispatch runs)
+        uses: actions/upload-artifact@v4
+        with:
+          name: vecteur-binaries
+          path: out/*
