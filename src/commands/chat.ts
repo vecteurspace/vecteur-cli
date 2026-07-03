@@ -10,7 +10,7 @@ import { createInterface } from "node:readline";
 import { loadConfig } from "../config.js";
 import { login } from "./auth.js";
 import { streamTurn, webBase, buildLocalContextQuery, openBrowser } from "../runner.js";
-import { handleSlashCommand, parseMentions, resolveWorkspaceProject } from "../session.js";
+import { handleSlashCommand, parseMentions, renameProject, resolveWorkspaceProject, titleFromPrompt } from "../session.js";
 
 const DIM = "\x1b[2m", RESET = "\x1b[0m", CYAN = "\x1b[36m", BOLD = "\x1b[1m";
 
@@ -110,6 +110,8 @@ export async function chat(): Promise<void> {
     else {
       console.log("\n" + (res.answer ?? "(no answer)") + "\n");
       if (res.sawVisual) console.log(`${DIM}(visual artifacts — see ${webBase()}/projects/${project})${RESET}`);
+      // First prompt in a freshly-created project becomes its title (self-describing in the web app).
+      if (created && turns === 0) void renameProject(project, titleFromPrompt(raw));
       lastTaskId = res.taskId;
       turns++;
     }

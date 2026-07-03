@@ -1,34 +1,37 @@
 import React from "react";
 import { render } from "ink-testing-library";
 import { App } from "./App.js";
+import { SLASH_COMMANDS } from "../session.js";
 import { test, expect } from "vitest";
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const DOWN = "\x1b[B";
+const first = SLASH_COMMANDS[0].name;
+const second = SLASH_COMMANDS[1].name;
 
 test("slash menu: highlights first, arrows move it, Tab completes, prefix+Enter runs highlighted", async () => {
   const { stdin, lastFrame } = render(<App project="p1" cwd="/tmp/ws" created={false} />);
   await wait(40);
 
-  // type "/" -> menu lists commands, first (files) highlighted with ❯
+  // type "/" -> menu lists commands, the first one highlighted with ❯
   stdin.write("/");
   await wait(40);
   let f = lastFrame() ?? "";
-  expect(f).toMatch(/❯ *\/files/);
+  expect(f).toMatch(new RegExp(`❯ */${first}`));
   expect(f).toContain("/exit"); // full menu present
 
-  // downArrow -> highlight moves to the second command (project)
+  // downArrow -> highlight moves to the second command
   stdin.write(DOWN);
   await wait(40);
   f = lastFrame() ?? "";
-  expect(f).toMatch(/❯ *\/project/);
+  expect(f).toMatch(new RegExp(`❯ */${second}`));
 
-  // fresh input "/fi" + Tab -> input completes to "/files "
-  stdin.write("\r");            // clear any state via a submit of current (project) — harmless
+  // fresh input prefixing "files" + Tab -> input completes to "/files "
+  stdin.write("\r"); // submit current highlight to reset input — harmless
   await wait(60);
   stdin.write("/fi");
   await wait(40);
-  stdin.write("\t");            // Tab completes to highlighted (files)
+  stdin.write("\t"); // Tab completes to the highlighted match (files)
   await wait(40);
   expect(lastFrame() ?? "").toMatch(/\/files/);
 });

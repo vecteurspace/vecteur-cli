@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Box, Static, Text, useApp, useInput } from "ink";
 import { buildLocalContextQuery, openBrowser, streamTurn, webBase } from "../runner.js";
-import { handleSlashCommand, parseMentions, SLASH_COMMANDS } from "../session.js";
+import { handleSlashCommand, parseMentions, renameProject, SLASH_COMMANDS, titleFromPrompt } from "../session.js";
 import { markdownToAnsi } from "./markdown.js";
 import { Header } from "./Header.js";
 import { Logo } from "./logo.js";
@@ -155,6 +155,8 @@ export function App({ project, cwd, created }: AppProps): JSX.Element {
         pushItem({ user: raw, answer: `✗ ${result.failed}`, tone: "error" });
       } else {
         pushItem({ user: raw, answer: result.answer ?? "(no answer)", sawVisual: result.sawVisual });
+        // First prompt in a freshly-created project becomes its title (self-describing in the web app).
+        if (created && turns === 0) void renameProject(project, titleFromPrompt(raw));
         setLastTaskId(result.taskId);
         setTurns((prev) => prev + 1);
         setTokenTotal((prev) => prev + (result.tokens?.total ?? 0));
