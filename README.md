@@ -4,6 +4,8 @@ Run space-mission-engineering queries from your terminal — an interactive agen
 your local files. The `vecteur` CLI is a **thin, open-source client**: the agent, physics
 libraries, and models run on Vecteur's servers, so nothing proprietary ships in this package.
 
+![Vecteur CLI](https://raw.githubusercontent.com/vecteurspace/vecteur-cli/main/assets/screenshot.png)
+
 ```
 npm install -g @vecteur/cli
 vecteur login          # opens your browser to approve this device

@@ -1,7 +1,7 @@
 /**
  * Shared agent-run streaming: create a task, open the authenticated agent WebSocket, stream
  * run-wire events, return the final answer. Used by both one-shot `ask` and the interactive REPL.
- * The brain (loop + prompts + ontology + LLM) runs server-side; the CLI is a thin client.
+ * The brain (agent loop, prompts, engineering models, and LLM) runs server-side; the CLI is a thin client.
  */
 import { readFileSync, statSync } from "node:fs";
 import { relative, resolve } from "node:path";
@@ -50,7 +50,19 @@ export interface TurnResult {
   taskId: string;
   answer: string | null;
   sawVisual: boolean;
+  tokens?: { input?: number; output?: number; total?: number };
   failed?: string;
+  quotaExceeded?: boolean;
+}
+
+function parseTokens(value: unknown): TurnResult["tokens"] {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  const input = typeof raw.input === "number" ? raw.input : undefined;
+  const output = typeof raw.output === "number" ? raw.output : undefined;
+  const total = typeof raw.total === "number" ? raw.total : undefined;
+  if (input === undefined && output === undefined && total === undefined) return undefined;
+  return { input, output, total };
 }
 
 /** Run one agent turn to completion and resolve with the answer text. */
@@ -100,10 +112,22 @@ export async function streamTurn(opts: TurnOpts): Promise<TurnResult> {
         if (result.answer === null) {
           result.answer = (ev.answer ?? ev.result ?? ev.synthesis ?? ev.summary ?? null) as string | null;
         }
+        result.tokens = parseTokens(ev.tokens);
       } else if (type === "run_failed") {
         result.failed = String(ev.error ?? "unknown error");
+      } else if (type === "quota_exceeded") {
+        // Backend blocked the run before spending tokens (agent_stream check_quota).
+        result.quotaExceeded = true;
+        const detail = String(ev.error ?? "You've reached your usage quota.");
+        result.failed = `${detail}\n  Upgrade your plan at ${webBase()}/dashboard (Account → Billing & Usage) to continue.`;
       }
-      if (type === "run_completed" || type === "task_completed" || type === "run_failed" || type === "stream_complete") {
+      if (
+        type === "run_completed" ||
+        type === "task_completed" ||
+        type === "run_failed" ||
+        type === "quota_exceeded" ||
+        type === "stream_complete"
+      ) {
         ws.close();
       }
     });
@@ -116,12 +140,14 @@ export async function streamTurn(opts: TurnOpts): Promise<TurnResult> {
   });
 }
 
-export async function openBrowser(url: string): Promise<void> {
+export async function openBrowser(url: string): Promise<boolean> {
   const { spawn } = await import("node:child_process");
   const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
   try {
     spawn(cmd, [url], { detached: true, stdio: "ignore" }).unref();
+    return true;
   } catch {
     /* best effort */
+    return false;
   }
 }

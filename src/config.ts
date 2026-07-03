@@ -18,6 +18,8 @@ export interface CliConfig {
   token?: string;
   tokenPrefix?: string; // non-secret, for display in `whoami`
   workspaces?: Record<string, string>; // absolute cwd -> project_id (per-directory session)
+  lastUpdateCheck?: number; // epoch ms of the last npm-registry version check (throttle)
+  latestKnownVersion?: string; // last version seen on the registry (for the offline notice)
 }
 
 function configPath(): string {
@@ -72,6 +74,28 @@ export function clearToken(): void {
 
 export function configFilePath(): string {
   return configPath();
+}
+
+/** Cached result of the last update check (used for the instant, offline-safe notice). */
+export function getUpdateCache(): { lastUpdateCheck?: number; latestKnownVersion?: string } {
+  const f = readFile();
+  return { lastUpdateCheck: f.lastUpdateCheck, latestKnownVersion: f.latestKnownVersion };
+}
+
+/** Persist the latest version seen on the registry + the check timestamp (best-effort). */
+export function saveUpdateCache(latestKnownVersion: string): void {
+  try {
+    const p = configPath();
+    mkdirSync(dirname(p), { recursive: true });
+    const file = readFile();
+    writeFileSync(
+      p,
+      JSON.stringify({ ...file, latestKnownVersion, lastUpdateCheck: Date.now() }, null, 2) + "\n",
+      { mode: 0o600 },
+    );
+  } catch {
+    /* update cache is best-effort — never break the CLI over it */
+  }
 }
 
 /** The project bound to a directory (per-directory workspace session), if any. */

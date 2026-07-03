@@ -10,13 +10,15 @@ import { login, logout, whoami } from "./commands/auth.js";
 import { listProjects } from "./commands/projects.js";
 import { ask } from "./commands/ask.js";
 import { chat } from "./commands/chat.js";
+import { VERSION } from "./version.js";
+import { maybeNotifyUpdate, runUpdate } from "./update.js";
 
 const program = new Command();
 
 program
   .name("vecteur")
   .description("Vecteur CLI — run space-engineering queries against the Vecteur platform.")
-  .version("0.1.0")
+  .version(VERSION)
   .option("--api-url <url>", "override API base URL (or set VECTEUR_API_URL)");
 
 program
@@ -25,9 +27,16 @@ program
   .option("--token <token>", "personal access token or bearer to store")
   .option("--email <email>", "email (password login)")
   .option("--password <password>", "password (password login)")
-  .action(async (o) => run(() => login({ ...o, apiUrl: program.opts().apiUrl })));
+  .option("--no-browser", "print the device authorization URL without opening a browser")
+  // commander maps `--no-browser` to `o.browser === false`; translate to the `noBrowser` flag login expects.
+  .action(async (o) => run(() => login({ ...o, noBrowser: o.browser === false, apiUrl: program.opts().apiUrl })));
 
 program.command("logout").description("Clear the stored token").action(() => logout());
+
+program
+  .command("update")
+  .description("Update the CLI to the latest published version")
+  .action(() => run(runUpdate));
 
 program.command("whoami").description("Show the current user, token, and API").action(() => run(whoami));
 
@@ -77,5 +86,8 @@ async function run(fn: () => void | Promise<void>): Promise<void> {
     }
   }
 }
+
+// Non-blocking update notice (cached banner now; background registry refresh once/day).
+maybeNotifyUpdate();
 
 program.parseAsync(process.argv);

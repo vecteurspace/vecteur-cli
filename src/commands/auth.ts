@@ -1,6 +1,7 @@
 /** login / logout / whoami. */
 import { api, ApiError } from "../api.js";
 import { clearToken, loadConfig, saveToken } from "../config.js";
+import { openBrowser } from "../runner.js";
 
 interface LoginResponse {
   access_token: string;
@@ -31,7 +32,7 @@ interface DeviceCode {
   interval: number;
 }
 
-export async function login(opts: { token?: string; email?: string; password?: string; apiUrl?: string }): Promise<void> {
+export async function login(opts: { token?: string; email?: string; password?: string; apiUrl?: string; noBrowser?: boolean }): Promise<void> {
   if (opts.token) {
     // Verify the token works before persisting.
     await api<Me>("/api/v1/auth/me", { token: opts.token });
@@ -49,12 +50,21 @@ export async function login(opts: { token?: string; email?: string; password?: s
     return;
   }
   // Default: browser device flow (RFC 8628). No password touches the terminal.
-  await deviceLogin(opts.apiUrl);
+  await deviceLogin(opts.apiUrl, opts.noBrowser);
 }
 
-async function deviceLogin(apiUrl?: string): Promise<void> {
+export function formatDeviceInstructions(verification_uri: string, user_code: string): string {
+  return `To authorize this device, open:
+  ${verification_uri}?code=${user_code}
+or go to ${verification_uri} and enter the code:  ${user_code}`;
+}
+
+async function deviceLogin(apiUrl?: string, noBrowser = false): Promise<void> {
   const dc = await api<DeviceCode>("/api/v1/auth/device/code", { method: "POST", body: {} });
-  console.log(`\nTo authorize this CLI, open:\n  ${dc.verification_uri}\nand enter the code:  ${dc.user_code}\n`);
+  console.log(`\n${formatDeviceInstructions(dc.verification_uri, dc.user_code)}\n`);
+  if (!noBrowser) {
+    await openBrowser(`${dc.verification_uri}?code=${dc.user_code}`);
+  }
   console.log(`Waiting for approval (expires in ${Math.round(dc.expires_in / 60)} min)…`);
 
   const deadline = Date.now() + dc.expires_in * 1000;

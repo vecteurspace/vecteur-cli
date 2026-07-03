@@ -4,6 +4,7 @@
  * Structured errors so commands can print actionable messages and set exit codes.
  */
 import { loadConfig } from "./config.js";
+import { VERSION } from "./version.js";
 
 export class ApiError extends Error {
   constructor(
@@ -22,7 +23,11 @@ export class ApiError extends Error {
       case 401:
         return "Not authenticated. Run `vecteur login` (or set VECTEUR_TOKEN).";
       case 403:
-        return "Forbidden — your token lacks the required scope for this action.";
+        // Prefer the server's actual reason (e.g. "Project limit reached…", a plan gate);
+        // fall back to the scope hint only when the server gave no detail (bare status text).
+        return this.message && this.message.toLowerCase() !== "forbidden"
+          ? this.message
+          : "Forbidden — your token may lack the required scope for this action.";
       case 429:
         return `Rate limit / quota exceeded${this.retryAfter ? ` — retry in ${this.retryAfter}s` : ""}.`;
       case 426:
@@ -54,7 +59,10 @@ export async function api<T = unknown>(path: string, opts: RequestOpts = {}): Pr
     }
   }
 
-  const headers: Record<string, string> = { Accept: "application/json" };
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    "User-Agent": `vecteur-cli/${VERSION}`, // lets the server 426-gate clients below a min version
+  };
   if (token) headers["Authorization"] = `Bearer ${token}`;
   if (opts.body !== undefined) headers["Content-Type"] = "application/json";
 

@@ -7,59 +7,54 @@
  * The brain stays server-side (Connected model) — the CLI is a thin, local, streaming client.
  */
 import { createInterface } from "node:readline";
-import { basename } from "node:path";
-import { api } from "../api.js";
-import { loadConfig, getWorkspaceProject, setWorkspaceProject } from "../config.js";
+import { loadConfig } from "../config.js";
+import { login } from "./auth.js";
 import { streamTurn, webBase, buildLocalContextQuery, openBrowser } from "../runner.js";
+import { handleSlashCommand, parseMentions, resolveWorkspaceProject } from "../session.js";
 
 const DIM = "\x1b[2m", RESET = "\x1b[0m", CYAN = "\x1b[36m", BOLD = "\x1b[1m";
 
-async function resolveWorkspaceProject(): Promise<{ id: string; created: boolean }> {
-  const cwd = process.cwd();
-  const bound = getWorkspaceProject(cwd);
-  if (bound) return { id: bound, created: false };
-  const name = basename(cwd) || "workspace";
-  const proj = await api<{ id: string }>("/api/v1/projects", {
-    method: "POST",
-    body: { name: `${name} (CLI)` },
-  });
-  setWorkspaceProject(cwd, proj.id);
-  return { id: proj.id, created: true };
-}
-
-/** Split a line into the prompt text and any @path file mentions. */
-function parseMentions(line: string): { text: string; files: string[] } {
-  const files: string[] = [];
-  const text = line.replace(/(?:^|\s)@(\S+)/g, (_m, p: string) => {
-    // Strip trailing sentence punctuation so "@spec.md?" resolves to "spec.md".
-    const path = p.replace(/[?.,;:!)]+$/, "");
-    files.push(path);
-    return ` ${path}`; // keep the (cleaned) path visible in the prompt text
-  });
-  return { text: text.trim(), files };
-}
-
-const HELP = `
-Commands:
-  @path             attach a local file as context (e.g. "explain @mission.md")
-  /files            list files in this workspace directory
-  /project          show the project bound to this directory
-  /open             open this workspace's run in the web app
-  /new              start a fresh conversation (new context)
-  /clear            clear the screen
-  /help             show this help
-  /exit  (or Ctrl-D) quit
-`;
-
 export async function chat(): Promise<void> {
-  const cfg = loadConfig();
+  let cfg = loadConfig();
   if (!cfg.token) {
-    console.error("Not logged in. Run `vecteur login` first.");
-    process.exitCode = 1;
+    // Force login first, then drop into the session — but only interactively; a piped/non-TTY
+    // invocation can't complete the device flow, so it still fails fast with guidance.
+    if (process.stdin.isTTY) {
+      console.log(`${DIM}You're not signed in — let's log in first.${RESET}\n`);
+      await login({});
+      cfg = loadConfig();
+    }
+    if (!cfg.token) {
+      console.error("Not logged in. Run `vecteur login` first.");
+      process.exitCode = 1;
+      return;
+    }
+  }
+  const { id: project, created } = await resolveWorkspaceProject();
+  const cwd = process.cwd();
+  const useInk =
+    Boolean(process.stdout.isTTY) &&
+    (process.stdout.columns ?? 0) >= 60 &&
+    (process.stdout.rows ?? 0) >= 10 &&
+    Boolean(process.stdin.isTTY);
+
+  if (useInk) {
+    const [{ render }, { createElement }, { App }] = await Promise.all([
+      import("ink"),
+      import("react"),
+      import("../ui/App.js"),
+    ]);
+    const instance = render(
+      createElement(App, {
+        project,
+        cwd,
+        created,
+        userLabel: cfg.tokenPrefix ?? "user",
+      }),
+    );
+    await instance.waitUntilExit();
     return;
   }
-  let { id: project, created } = await resolveWorkspaceProject();
-  const cwd = process.cwd();
 
   console.log(`${BOLD}Vecteur${RESET} ${DIM}— space-engineering agent in your terminal${RESET}`);
   console.log(`${DIM}workspace: ${cwd}${RESET}`);
@@ -80,22 +75,15 @@ export async function chat(): Promise<void> {
     }
 
     if (raw.startsWith("/")) {
-      const [cmd] = raw.slice(1).split(/\s+/);
-      if (cmd === "exit" || cmd === "quit") break;
-      else if (cmd === "help") console.log(HELP);
-      else if (cmd === "clear") console.clear();
-      else if (cmd === "project") console.log(`project ${project}  (dir: ${cwd})`);
-      else if (cmd === "open") void openBrowser(`${webBase()}/projects/${project}`);
-      else if (cmd === "new") {
+      const result = await handleSlashCommand(raw, { project, cwd });
+      if (result.exit) break;
+      if (result.clear) console.clear();
+      if (result.open) void openBrowser(result.open);
+      if (result.reset) {
         turns = 0;
         lastTaskId = undefined;
-        console.log(`${DIM}started a fresh conversation${RESET}`);
-      } else if (cmd === "files") {
-        const files = await api<{ files?: unknown[] }>(
-          `/api/v1/projects/${project}/workspace/files`,
-        ).catch(() => ({ files: [] as unknown[] }));
-        console.log((files.files ?? []).map((f: any) => `  ${f.name ?? f}`).join("\n") || "  (none)");
-      } else console.log(`unknown command: /${cmd} (/help)`);
+      }
+      if (result.output) console.log(result.output);
       rl.prompt();
       continue;
     }

@@ -1,6 +1,6 @@
 {
   "name": "@vecteur/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Vecteur CLI — a thin client for the Vecteur space-engineering platform (login, ask, projects, files). Hosted brain; no IP ships.",
   "type": "module",
   "license": "MIT",
@@ -38,18 +38,26 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.json",
     "dev": "tsc -w -p tsconfig.json",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "commander": "^12.1.0",
+    "ink": "^5.2.1",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^6.0.0",
+    "react": "^18.3.1",
     "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/react": "^18.3.31",
     "@types/ws": "^8.5.12",
-    "typescript": "^5.6.0"
+    "ink-testing-library": "^4.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.9"
   }
 }
