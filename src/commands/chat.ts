@@ -9,6 +9,7 @@
 import { createInterface } from "node:readline";
 import { loadConfig } from "../config.js";
 import { login } from "./auth.js";
+import { refreshUpdateCache, updateNoticeFromCache } from "../update.js";
 import { streamTurn, webBase, buildLocalContextQuery, openBrowser } from "../runner.js";
 import { handleSlashCommand, parseMentions, renameProject, resolveWorkspaceProject, titleFromPrompt } from "../session.js";
 
@@ -32,6 +33,9 @@ export async function chat(): Promise<void> {
   }
   const { id: project, created } = await resolveWorkspaceProject();
   const cwd = process.cwd();
+  // Refresh the update cache (throttled to once/day) so the notice shows this run, not next.
+  await refreshUpdateCache();
+  const updateNotice = updateNoticeFromCache();
   const useInk =
     Boolean(process.stdout.isTTY) &&
     (process.stdout.columns ?? 0) >= 60 &&
@@ -50,6 +54,7 @@ export async function chat(): Promise<void> {
         cwd,
         created,
         userLabel: cfg.tokenPrefix ?? "user",
+        updateNotice,
       }),
     );
     await instance.waitUntilExit();
@@ -58,7 +63,9 @@ export async function chat(): Promise<void> {
 
   console.log(`${BOLD}Vecteur${RESET} ${DIM}— space-engineering agent in your terminal${RESET}`);
   console.log(`${DIM}workspace: ${cwd}${RESET}`);
-  console.log(`${DIM}project:   ${project}${created ? " (new)" : ""}  ·  /help for commands${RESET}\n`);
+  console.log(`${DIM}project:   ${project}${created ? " (new)" : ""}  ·  /help for commands${RESET}`);
+  if (updateNotice) console.log(`\x1b[33m${updateNotice}${RESET}`);
+  console.log("");
 
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: `${CYAN}› ${RESET}` });
   let turns = 0;

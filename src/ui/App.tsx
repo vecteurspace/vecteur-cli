@@ -21,6 +21,7 @@ export interface AppProps {
   cwd: string;
   created: boolean;
   userLabel: string;
+  updateNotice?: string;
 }
 
 function highlightMentions(line: string): JSX.Element {
@@ -77,7 +78,7 @@ function SlashMenu({ value, selected }: { value: string; selected: number }): JS
   );
 }
 
-export function App({ project, cwd, created }: AppProps): JSX.Element {
+export function App({ project, cwd, created, updateNotice }: AppProps): JSX.Element {
   const { exit } = useApp();
   const [input, setInput] = useState("");
   const [history, setHistory] = useState<string[]>([]);
@@ -215,6 +216,7 @@ export function App({ project, cwd, created }: AppProps): JSX.Element {
   return (
     <Box flexDirection="column" width="100%">
       <Header cwd={cwd} project={project} />
+      {updateNotice ? <Text color="yellow">↑ {updateNotice}</Text> : null}
       {items.length === 0 && turns === 0 ? (
         <Box flexDirection="column">
           <Logo />

@@ -53,18 +53,6 @@ export async function refreshUpdateCache(): Promise<void> {
   }
 }
 
-/**
- * Print the cached update banner (to stderr, TTY only, so it never pollutes piped/JSON output)
- * and kick off a background cache refresh that we intentionally do NOT await.
- */
-export function maybeNotifyUpdate(): void {
-  const notice = updateNoticeFromCache();
-  if (notice && process.stderr.isTTY) {
-    process.stderr.write(`\x1b[2m${notice}\x1b[0m\n`);
-  }
-  void refreshUpdateCache();
-}
-
 /** `vecteur update` — self-update via the global npm install. */
 export async function runUpdate(): Promise<void> {
   const { spawn } = await import("node:child_process");

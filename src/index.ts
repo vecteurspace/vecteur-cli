@@ -11,7 +11,7 @@ import { listProjects } from "./commands/projects.js";
 import { ask } from "./commands/ask.js";
 import { chat } from "./commands/chat.js";
 import { VERSION } from "./version.js";
-import { maybeNotifyUpdate, runUpdate } from "./update.js";
+import { refreshUpdateCache, runUpdate } from "./update.js";
 
 const program = new Command();
 
@@ -87,7 +87,7 @@ async function run(fn: () => void | Promise<void>): Promise<void> {
   }
 }
 
-// Non-blocking update notice (cached banner now; background registry refresh once/day).
-maybeNotifyUpdate();
+// Keep the update cache warm for all commands (throttled once/day); `chat` shows the notice in-TUI.
+void refreshUpdateCache();
 
 program.parseAsync(process.argv);
