@@ -3,8 +3,9 @@ name: binaries
 # Build standalone single-file binaries (no Node needed) for each OS/arch and attach them to
 # the GitHub release. Runs on a version tag, or manually via workflow_dispatch.
 on:
-  push:
-    tags: ["v*"]
+  # Manual-only for now: single-file binaries need extra work to bundle ink cleanly
+  # (react-devtools-core is a DEV-gated dynamic import bun can't resolve into one file) and
+  # will ship with code-signing under the packaging work-package. npm is the primary channel.
   workflow_dispatch:
 
 permissions:
