@@ -21,4 +21,18 @@ describe("markdownToAnsi", () => {
     expect(rendered).toContain("• two");
     expect(rendered).toContain("1. three");
   });
+
+  it("strips <details>/<summary> web-UI HTML and decodes entities", () => {
+    const src =
+      '<details class="subagent-synthesis" data-agent="engineering">\n' +
+      "<summary>🔎 engineering — reasoning &amp; results</summary>\n\n" +
+      "Yes — VLEO is a subset of LEO.\n\n</details>";
+    const rendered = markdownToAnsi(src);
+
+    expect(rendered).not.toMatch(/<details|<\/details>|<summary>|<\/summary>|data-agent|class=/);
+    expect(rendered).not.toContain("&amp;");
+    expect(rendered).toContain("reasoning & results"); // entity decoded
+    expect(rendered).toContain("▸ "); // summary rendered as a section header
+    expect(rendered).toContain("Yes — VLEO is a subset of LEO."); // body kept
+  });
 });
