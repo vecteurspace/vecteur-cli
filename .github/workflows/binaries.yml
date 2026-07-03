@@ -35,7 +35,12 @@ jobs:
           for name in "${!T[@]}"; do
             ext=""; [ "$name" = "windows-x64" ] && ext=".exe"
             echo "building vecteur-$name$ext (${T[$name]})"
-            bun build dist/index.js --compile --target="${T[$name]}" --outfile "out/vecteur-$name$ext" \
+            # react-devtools-core is a DEV-only dep ink loads via a conditional dynamic import
+            # (reconciler.js, gated on DEV=true) — never reached in a shipped binary. Mark it
+            # external so bun's static bundler doesn't try to resolve it and fail every target.
+            bun build dist/index.js --compile --target="${T[$name]}" \
+              --external react-devtools-core \
+              --outfile "out/vecteur-$name$ext" \
               || echo "::warning::failed to build $name (best-effort target)"
           done
           ls -la out/
