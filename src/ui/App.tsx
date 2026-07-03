@@ -220,7 +220,19 @@ export function App({ project, cwd, created, updateNotice }: AppProps): JSX.Elem
       {items.length === 0 && turns === 0 ? (
         <Box flexDirection="column">
           <Logo />
-          <Text dimColor>New workspace. Try: "design a sun-synchronous orbit at 550 km" — or @mention a local file.</Text>
+          <Text dimColor>Ask space-engineering questions in plain language — the Vecteur oracle and its</Text>
+          <Text dimColor>subagents run on our servers and answer with cited results.</Text>
+          <Text> </Text>
+          <Text dimColor>
+            {"  "}
+            <Text color="cyan">@file</Text> attach a local file{"   "}
+            <Text color="cyan">/help</Text> commands{"   "}
+            <Text color="cyan">↑↓</Text> history{"   "}
+            <Text color="cyan">ctrl-d</Text> exit
+          </Text>
+          <Text dimColor>
+            {"  "}Try <Text color="white">"design a sun-synchronous orbit at 550 km"</Text> — or @mention a file to analyze.
+          </Text>
         </Box>
       ) : null}
       <Static items={items}>

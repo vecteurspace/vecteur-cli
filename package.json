@@ -1,6 +1,6 @@
 {
   "name": "@vecteur/cli",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Vecteur CLI — a thin client for the Vecteur space-engineering platform (login, ask, projects, files). Hosted brain; no IP ships.",
   "type": "module",
   "license": "MIT",

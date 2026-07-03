@@ -84,6 +84,11 @@ export function unitsAsTime(units: number): string {
 interface SubscriptionUsage {
   account_type?: string;
   credit_balance_eur?: number;
+  usage_framing?: {
+    daily_used_pct: number | null;
+    monthly_used_pct: number | null;
+    prompts_left_today: number | null;
+  } | null;
   tokens?: {
     daily_used: number;
     daily_limit: number;
@@ -105,8 +110,15 @@ interface SubscriptionUsage {
 export function formatUsage(sub: SubscriptionUsage): string {
   const lines: string[] = [];
   const t = sub.tokens;
+  const f = sub.usage_framing;
   lines.push(`plan: ${(sub.account_type ?? "free").toUpperCase()}`);
-  if (t) {
+  // Percent/prompt framing first (same vocabulary as web); time as fallback.
+  if (f && f.daily_used_pct !== null) {
+    const prompts =
+      f.prompts_left_today !== null ? ` · ≈ ${f.prompts_left_today.toLocaleString()} prompts left` : "";
+    lines.push(`today:      ${f.daily_used_pct}% used${prompts}`);
+    if (f.monthly_used_pct !== null) lines.push(`this month: ${f.monthly_used_pct}% used`);
+  } else if (t) {
     const dailyLeft = Math.max(0, t.daily_limit - t.daily_used);
     const monthlyLeft = Math.max(0, t.monthly_limit - t.monthly_used);
     lines.push(

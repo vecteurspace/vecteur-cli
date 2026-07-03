@@ -10,6 +10,22 @@ describe("unitsAsTime (1,000 units ≈ 1 min — shared vocabulary)", () => {
 });
 
 describe("formatUsage", () => {
+  it("prefers percent/prompt framing when the API provides it", () => {
+    const out = formatUsage({
+      account_type: "basic",
+      usage_framing: { daily_used_pct: 4.6, monthly_used_pct: 0.5, prompts_left_today: 272 },
+      tokens: {
+        daily_used: 1_000_000,
+        daily_limit: 12_602_394,
+        monthly_used: 30_000_000,
+        monthly_limit: 252_047_889,
+      },
+    });
+    expect(out).toContain("today:      4.6% used · ≈ 272 prompts left");
+    expect(out).toContain("this month: 0.5% used");
+    expect(out).not.toContain("left of");
+  });
+
   it("renders plan, usage, forecast, grants and credits from real shapes", () => {
     const out = formatUsage({
       account_type: "basic",
