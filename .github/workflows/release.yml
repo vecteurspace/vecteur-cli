@@ -1,33 +1,26 @@
-name: release
-
-# Publish @vecteur/cli to npm with provenance (OIDC) on a version tag.
+name: Publish reviewed CLI
 on:
   push:
-    tags: ["v*"]
-
+    tags:
+      - 'v*'
 permissions:
   contents: read
-  id-token: write # required for npm provenance (SLSA) via GitHub OIDC
-
+  id-token: write
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          node-version: 20
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.2
           registry-url: https://registry.npmjs.org
-      - run: npm ci
-      - run: npm run build
-      - run: npm run typecheck
-      # tarball must contain ONLY compiled client + license/readme (no src, no secrets)
-      - name: verify pack contents
-        run: |
-          npm pack --dry-run 2>&1 | tee /tmp/pack.txt
-          if grep -qE '\.ts$|node_modules|scripts/' /tmp/pack.txt; then
-            echo "::error::tarball contains unexpected files"; exit 1
-          fi
-      - run: npm publish --provenance --access public
+      - run: npm install --global npm@12.2.0 --ignore-scripts
+      - run: python3 .release/verify.py
+      - run: npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP"
+      - run: python3 .release/verify.py "$RUNNER_TEMP/vecteur-cli-0.9.1.tgz"
+      - run: npm publish "$RUNNER_TEMP/vecteur-cli-0.9.1.tgz" --provenance --access public --ignore-scripts --tag candidate
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

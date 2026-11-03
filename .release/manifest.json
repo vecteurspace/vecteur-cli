@@ -1,0 +1,152 @@
+{
+  "files": {
+    ".github/workflows/release.yml": {
+      "mode": 420,
+      "sha256": "db7d617f0bda151426ec86370a6aac5b34448a180dc5153312e0d8f47d244e7c"
+    },
+    ".release/verify.py": {
+      "mode": 420,
+      "sha256": "366f5c57c2c836230d91dc4b8ecf76522435850fd16fecf7f6afb36a93e9a696"
+    },
+    "README.md": {
+      "mode": 420,
+      "sha256": "e23227320c8c8d7460380a751a9448b69b0436cf1057fed3aca8fb8fecf1fe72"
+    },
+    "bin/vecteur.js": {
+      "mode": 493,
+      "sha256": "4f3aaf6a8fd52fa1f37a95b572dfe0f89eb6f0071ae84c09f544bb2d9a69822d"
+    },
+    "package.json": {
+      "mode": 420,
+      "sha256": "1ebeedb470b5c2a8da6cc8114043d2f285c30445d491e6b04413f829e3d5c477"
+    },
+    "src/blocks.js": {
+      "mode": 420,
+      "sha256": "d8fa74f5ef238ea66723ae5899c11d8971ee9c19118dc46cb26c0522dc721417"
+    },
+    "src/browser.js": {
+      "mode": 420,
+      "sha256": "3d31e0abc633cea5390a3e41d101b49bd642e9fec21fbd43e2a8cdac5f89b734"
+    },
+    "src/client.js": {
+      "mode": 420,
+      "sha256": "7fc0a44259c5bcdbb701f5b3e7436bf519cf30af5150284270e864ba12813d6e"
+    },
+    "src/commands.js": {
+      "mode": 420,
+      "sha256": "9685881d0d05127d0dc529b776a4d6d1043d8cb1d10cfddb91bf181b7487d7a1"
+    },
+    "src/contract.js": {
+      "mode": 420,
+      "sha256": "163284d2f86953df84685d9b87908eb5c048127e58b10fcc8344329a50cc417d"
+    },
+    "src/credentials.js": {
+      "mode": 420,
+      "sha256": "44a07bdb12fc15860bfb11236973aef9197e30dd771bee7fae4db5aed7bced10"
+    },
+    "src/diagnostics.js": {
+      "mode": 420,
+      "sha256": "2309c900bdc8e2ec177464877317ba88cfeebbfd6eb2708ace5251124dcb1b97"
+    },
+    "src/download.js": {
+      "mode": 420,
+      "sha256": "18d4a772976675fafd359e4ec538f91fd74a20aaf4d04b53e1e3cbb15c7cade0"
+    },
+    "src/errors.js": {
+      "mode": 420,
+      "sha256": "600cb777a263cfa79171eddc1cd5180f9d7e6ba633badcc6dbcaba110fb9e175"
+    },
+    "src/folders.js": {
+      "mode": 420,
+      "sha256": "18bfc044204b6e4a253c061a86644c434f38a17d2be7076f02fa815edb6083c2"
+    },
+    "src/format.js": {
+      "mode": 420,
+      "sha256": "f17c3fd167f20ccdcf0eda93c4d4e2ae66ed2fcfa465744879491f50fe0d0d29"
+    },
+    "src/input.js": {
+      "mode": 420,
+      "sha256": "6f39009c1f736ad7761825c24b9fbba0e6bacd4271692989e815f4ce04c7cdfc"
+    },
+    "src/markdown.js": {
+      "mode": 420,
+      "sha256": "39707d885e0b63196cabf83b90e323f03c5c06144741a4c4961f50cbdf8419e5"
+    },
+    "src/mcp.js": {
+      "mode": 420,
+      "sha256": "5ed83f2499ff15b294cb7ce2e31797a1df8bdca5f5f203fe795a4370af727760"
+    },
+    "src/preferences.js": {
+      "mode": 420,
+      "sha256": "ad52852601748ffcd34639ca0cf06781d3f468a11f5d578ab146b392bfabdd6d"
+    },
+    "src/projects.js": {
+      "mode": 420,
+      "sha256": "c975d200cc319c2f8d0a75048dc99347ae723aa9b06c17975f611e37f648269e"
+    },
+    "src/session.js": {
+      "mode": 420,
+      "sha256": "93280520bbd9cd90c1a2a3ec09941a5bf2e1b2e927ad5c98d066ff094bfa60f2"
+    },
+    "src/store.js": {
+      "mode": 420,
+      "sha256": "c07811803f7899e1d34e94bf91c932fa61795b59efcce6d5dfdaeda794ca1265"
+    },
+    "src/terminal.js": {
+      "mode": 420,
+      "sha256": "e7db9dd96e7b3e3911707cbb13fca177222e54cf3085f19f2d58f7ecf0c2b234"
+    },
+    "src/tui/view.js": {
+      "mode": 420,
+      "sha256": "9d5e7776f0dcaaaa96273a4e7218024cbcb2d67397d7df7e31eedf9aeccea903"
+    },
+    "src/update.js": {
+      "mode": 420,
+      "sha256": "d6c60dd1d8a1624afcfb93d0d223813383efce554c2509292150aa6622a3024a"
+    },
+    "src/vendors.js": {
+      "mode": 420,
+      "sha256": "99278e6dd935f3380c132092c716c3598d35a40ec13f092d99196eb166ba32a5"
+    }
+  },
+  "release": {
+    "cli": {
+      "contract_identity": "api-sha256:b78084db722fba9eb9c159fcc93b29d12db0760ded46263aca2ad2fcf97d6a3f;run-wire-sha256:7bc5c77a90d6093cff5179533d4f4b6326056057dd677740cac097ebc0c8fb54",
+      "integrity": "sha512-swYn06WCX51Q00XevqVFPtJ7c/sqhiz0LfDCyPhPp7cy2yeuOwf6Je/CJ9Ku2AQm6X6remFM8J1giQsx5FDJ7Q==",
+      "package": "@vecteur/cli",
+      "version": "0.9.1"
+    },
+    "schema": "release-cli.v1",
+    "tag": "v4.3.0"
+  },
+  "tracked": [
+    ".github/workflows/release.yml",
+    ".release/manifest.json",
+    ".release/verify.py",
+    "README.md",
+    "bin/vecteur.js",
+    "package.json",
+    "src/blocks.js",
+    "src/browser.js",
+    "src/client.js",
+    "src/commands.js",
+    "src/contract.js",
+    "src/credentials.js",
+    "src/diagnostics.js",
+    "src/download.js",
+    "src/errors.js",
+    "src/folders.js",
+    "src/format.js",
+    "src/input.js",
+    "src/markdown.js",
+    "src/mcp.js",
+    "src/preferences.js",
+    "src/projects.js",
+    "src/session.js",
+    "src/store.js",
+    "src/terminal.js",
+    "src/tui/view.js",
+    "src/update.js",
+    "src/vendors.js"
+  ]
+}

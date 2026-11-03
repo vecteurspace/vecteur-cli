@@ -1,63 +1,62 @@
 {
   "name": "@vecteur/cli",
-  "version": "0.2.4",
-  "description": "Vecteur CLI — a thin client for the Vecteur space-engineering platform (login, ask, projects, files). Hosted brain; no IP ships.",
+  "version": "0.9.1",
   "type": "module",
-  "license": "MIT",
-  "author": "Vecteur <hello@vecteur.space>",
-  "homepage": "https://vecteur.space",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/vecteurspace/vecteur-cli.git"
-  },
-  "bugs": {
-    "url": "https://github.com/vecteurspace/vecteur-cli/issues"
-  },
-  "keywords": [
-    "vecteur",
-    "space",
-    "space-systems",
-    "engineering",
-    "cli",
-    "agent",
-    "mcp"
-  ],
   "bin": {
-    "vecteur": "dist/index.js"
+    "vecteur": "bin/vecteur.js"
   },
   "files": [
-    "dist",
     "README.md",
-    "LICENSE"
+    "bin/vecteur.js",
+    "src/client.js",
+    "src/contract.js",
+    "src/credentials.js",
+    "src/download.js",
+    "src/errors.js",
+    "src/format.js",
+    "src/mcp.js",
+    "src/projects.js",
+    "src/store.js",
+    "src/folders.js",
+    "src/browser.js",
+    "src/blocks.js",
+    "src/session.js",
+    "src/input.js",
+    "src/commands.js",
+    "src/terminal.js",
+    "src/markdown.js",
+    "src/tui/view.js",
+    "src/diagnostics.js",
+    "src/preferences.js",
+    "src/update.js",
+    "src/vendors.js"
   ],
-  "publishConfig": {
-    "access": "public",
-    "provenance": true
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "contract:check": "node scripts/gen-contract.mjs --check",
+    "verify-package": "node scripts/verify-package.mjs",
+    "prepublishOnly": "npm test && npm run contract:check && npm run verify-package"
   },
   "engines": {
     "node": ">=20"
   },
-  "scripts": {
-    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
-    "build": "npm run clean && tsc -p tsconfig.json",
-    "dev": "tsc -w -p tsconfig.json",
-    "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
-  },
   "dependencies": {
-    "commander": "^12.1.0",
-    "ink": "^5.2.1",
-    "ink-spinner": "^5.0.0",
-    "ink-text-input": "^6.0.0",
-    "react": "^18.3.1",
-    "ws": "^8.18.0"
+    "@modelcontextprotocol/server": "2.0.0",
+    "string-width": "7.2.0",
+    "wrap-ansi": "9.0.2",
+    "zod": "4.4.3"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "@types/react": "^18.3.31",
-    "@types/ws": "^8.5.12",
-    "ink-testing-library": "^4.0.0",
-    "typescript": "^5.6.0",
-    "vitest": "^2.1.9"
+    "@modelcontextprotocol/client": "2.0.0"
+  },
+  "description": "The Vecteur command line \u2014 one login, the same product as the web app, from any directory.",
+  "license": "UNLICENSED",
+  "repository": "git+https://github.com/vecteurspace/vecteur-cli.git",
+  "publishConfig": {
+    "access": "public"
+  },
+  "vecteur": {
+    "updateProtocol": 1,
+    "channel": "stable"
   }
 }
