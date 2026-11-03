@@ -13,6 +13,7 @@ import { humanCost, runSections } from "./format.js";
 import { CATALOGUE_ENVELOPE_SHA256, MODEL_CATALOGUE, PRODUCT_ROUTES } from "./contract.js";
 import { openBrowser } from "./browser.js";
 
+export const NEW_FOLDER = "New folder — send an ask or /link an existing Project";
 const AUTH_ERRORS = new Set(["pat_expired", "pat_invalid", "pat_revoked"]);
 const TRANSIENT = new Set(["request_failed", "request_timeout", "terminal_invalid"]);
 const MEDIA = { ".txt": "text/plain", ".md": "text/markdown", ".csv": "text/csv", ".json": "application/json",
@@ -45,6 +46,8 @@ export class Session extends EventEmitter {
       projectLabel: this.project?.name ?? (this.binding ? "Linked Project unavailable" : "New Project on first send"),
       status: activity + (canEdit ? "" : " · Read-only — Viewer") + (projection.terminal ? ` · ${projection.elapsed}` : ""), draft: this.draft, prompt: this.prompt, busy: this.busy,
       offline: this.offline, issue: this.issue, login: this.loginChallenge, release: this.release,
+      // First use: signed in and online, the folder resolved to no binding/Project/Run, nothing pending.
+      firstUse: !!this.account && !this.offline && !this.busy && !this.project && !this.run && this.status === NEW_FOLDER,
       attachments: this.attachments.map(item => ({ path: item.path, size: item.bytes.length })),
       lead: "Laplace", location: "Vecteur cloud", model: modelLabel,
       run: projection, available: { submit: !this.offline && !!this.account && canEdit && !this.busy && !this.run?.open,
@@ -252,7 +255,7 @@ export class Session extends EventEmitter {
       this.project = this.projects.find(project => project.id === binding.projectId) ?? null;
       if (!this.project) { this.status = "Linked Project unavailable — /project or /unlink"; this.change(); return; }
     }
-    this.status = this.project ? "Ready" : "New folder — send an ask or /link an existing Project";
+    this.status = this.project ? "Ready" : NEW_FOLDER;
     const pending = this.registry.state();
     if (pending.pendingRun || pending.pendingCreate) {
       this.followController?.abort(); this.generation++; this.run = null;

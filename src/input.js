@@ -80,6 +80,20 @@ export class ComposerInput extends EventEmitter {
         this.pasted = ""; this.pasting = false; this.pasteOverflow = false; continue;
       }
       if (this.pending.startsWith(START)) { this.pasting = true; this.pending = this.pending.slice(START.length); continue; }
+      // Terminal replies to the writer's own queries are never keys, early or late: a colour
+      // report (OSC 10/11) is recognised by its own form, any OSC while the writer awaits one.
+      // A bare Alt+] keeps its meaning.
+      const report = /^\x1b\](?:1(?:[01](?:;(?:r(?:g(?:b(?::[0-9a-f/]*)?)?)?)?)?)?)?/i.exec(this.pending)?.[0] ?? "";
+      if (this.pending.startsWith("\x1b]") && (this.expectReports || report.length > 2)) {
+        const end = /\x07|\x1b\\/.exec(this.pending);
+        if (!end && this.pending.length < 256 && (this.expectReports || report.length === this.pending.length)) {
+          this.escapeTimer = setTimeout(() => { this.pending = ""; }, 300); return;
+        }
+        const length = end ? end.index + end[0].length : 2;
+        const reply = this.pending.slice(0, length); this.pending = this.pending.slice(length);
+        if (end) this.emit("report", reply);
+        continue;
+      }
       if (this.pending.startsWith("\x1b")) {
         if (this.pending.startsWith("\x1b\x1b")) {
           // Escape followed by an arrow/Alt-Enter keeps that encoded key intact.
@@ -100,6 +114,7 @@ export class ComposerInput extends EventEmitter {
         const escape = /^\x1b\[[0-?]*[ -/]*[@-~]/.exec(this.pending)?.[0];
         if (escape) {
           this.pending = this.pending.slice(escape.length);
+          if (/^\x1b\[\d+;\d+R$/.test(escape)) { this.emit("report", escape); continue; }
           if (this.handleKey?.(escape)) continue;
           if (escape === "\x1b[D") this.cursor = this.boundary(-1);
           else if (escape === "\x1b[C") this.cursor = this.boundary(1);

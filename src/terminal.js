@@ -6,17 +6,36 @@ import { preferences } from "./preferences.js";
 import { openBrowser } from "./browser.js";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { stripVTControlCharacters } from "node:util";
+import stringWidth from "string-width";
 
-/** The only stdout writer. It never clears the screen/scrollback or enters alternate screen. */
+const measure = value => /^[\x20-\x7e]*$/.test(value) ? value.length : stringWidth(value);
+
+/**
+ * The only stdout writer. It never clears the screen/scrollback or enters alternate screen.
+ * Rich mode parks the cursor (hidden) at column 1 of the first live row: everything from there
+ * down is the live region, so one erase-below removes exactly it, even after the terminal has
+ * reflowed it on resize. A cursor-position report places that row; blank rows between the
+ * transcript and the bottom-anchored composer are cursor movement, never printed history.
+ */
 export class TerminalWriter {
-  constructor(stdout, plain) { this.stdout = stdout; this.plain = plain; this.height = 0; }
-  erase() {
-    if (!this.height) return "";
-    const move = `\x1b[${this.height}A\r`, bytes = move + "\x1b[2K\n".repeat(this.height) + move;
-    this.height = 0;
-    return bytes;
+  constructor(stdout, plain) {
+    this.stdout = stdout; this.plain = plain; this.drawn = false; this.frame = null;
+    this.row = null; this.awaiting = 0; this.since = 0;
   }
-  clearLive() { const bytes = this.erase(); if (bytes) this.stdout.write(bytes); }
+  erase() {
+    if (!this.drawn) return "";
+    this.drawn = false;
+    return "\r\x1b[J";
+  }
+  clearLive() { this.frame = null; const bytes = this.erase(); if (bytes) this.stdout.write(bytes); }
+  // Display rows the terminal used for appended text; rich lines are narrower than the window.
+  advance(text) {
+    const columns = Math.max(1, this.stdout.columns ?? 80);
+    const rows = text.split("\n").reduce((sum, line) => sum + Math.max(1, Math.ceil(measure(stripVTControlCharacters(line)) / columns)), 0);
+    if (this.awaiting) this.since += rows;
+    else if (this.row) this.row = Math.min(this.stdout.rows ?? 24, this.row + rows);
+  }
   progress(view) {
     const subject = view.run?.subject?.id;
     if (subject !== this.subject) { this.subject = subject; this.lastProgress = null; this.lastQuestion = null; }
@@ -30,17 +49,59 @@ export class TerminalWriter {
       if (question) this.append(safe(`Vecteur needs your answer — /answer\n${question.questions.map(row => row.question).join("\n")}`));
     }
   }
-  append(text) { this.stdout.write(`${this.erase()}${text.replace(/\n+$/, "")}\n`); }
-  draw(text) {
+  /** Scrollback text, then the given live frame in the same write: the composer never blinks out. */
+  append(text, frame = null) {
+    const body = text.replace(/\n+$/, "");
+    let bytes = `${this.erase()}${body}\n`;
+    if (!this.plain) this.advance(body);
+    if (frame) { this.frame = frame; bytes += this.render(); }
+    this.stdout.write(bytes);
+  }
+  draw(frame) {
     if (this.plain) return;
+    this.frame = typeof frame === "string" ? { top: [], bottom: frame.replace(/\n+$/, "").split("\n") } : frame;
     // One write per frame: erase and redraw land together, so the spinner never flickers.
-    const lines = text.replace(/\n+$/, "");
-    this.stdout.write(`${this.erase()}${lines}\n`); this.height = lines.split("\n").length;
+    const bytes = this.render();
+    if (bytes) this.stdout.write(bytes);
+  }
+  render() {
+    if (this.plain || !this.frame || this.awaiting) return "";
+    const rows = this.stdout.rows ?? 24;
+    const lines = [...this.frame.top, ...this.frame.bottom].slice(-Math.max(1, rows - 1));
+    const gap = this.row ? Math.max(0, rows - this.row + 1 - lines.length) : 0;
+    const at = Math.max(0, lines.length - this.frame.bottom.length);
+    const body = [...lines.slice(0, at), ...Array(gap).fill(""), ...lines.slice(at)];
+    const up = body.length - 1;
+    if (this.row) this.row = Math.max(1, Math.min(this.row, rows - body.length + 1));
+    const erase = this.erase(); this.drawn = true;
+    return `${erase}${body.join("\n")}${up ? `\x1b[${up}A` : ""}\r`;
+  }
+  /** Ask the terminal where the live region starts; frames wait for the answer (or 300 ms). */
+  locate(query = "") {
+    if (this.plain) return;
+    this.awaiting++; this.since = 0;
+    this.stdout.write(`${query}\x1b[6n`);
+    clearTimeout(this.locateTimer);
+    this.locateTimer = setTimeout(() => { this.awaiting = 0; this.row = null; this.onLocated?.(); }, 300);
+  }
+  located(row, column) {
+    if (!this.awaiting || --this.awaiting) return;
+    clearTimeout(this.locateTimer);
+    const rows = this.stdout.rows ?? 24;
+    let bytes = "";
+    // Another program left the cursor mid-line: start the live region on the next row.
+    if (column > 1 && !this.since) { bytes = "\r\n"; row++; }
+    this.row = Math.max(1, Math.min(rows, row + this.since));
+    if (bytes) this.stdout.write(bytes);
+    this.onLocated?.();
   }
   resized(plain) {
-    // Reflow can collapse old wrapped lines: their old height is no longer a safe erase bound.
-    this.height = 0; this.plain = plain; this.stdout.write("\n");
+    // Reflow moved the old frame but not the parked cursor: erase below it, then re-locate.
+    const bytes = this.drawn ? "\r\x1b[J" : "";
+    this.drawn = false; this.frame = null; this.row = null; this.plain = plain;
+    if (bytes) this.stdout.write(bytes);
   }
+  close() { clearTimeout(this.locateTimer); this.awaiting = 0; }
 }
 
 export async function startTerminal(options = {}, { stdin = process.stdin, stdout = process.stdout, env = process.env } = {}) {
@@ -51,6 +112,8 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
   }
   let rich = !options.plain && !prefs.plain && env.TERM !== "dumb";
   const color = !options.noColor && env.NO_COLOR === undefined;
+  // Colour roles start palette-relative; a terminal that reports its own colours gets exact blends.
+  let theme = color; const reported = {};
   const layout = await import("./tui/view.js");
   const isPlain = () => !rich || ((stdout.columns ?? 80) < 40 || (stdout.rows ?? 24) < 8);
   const writer = new TerminalWriter(stdout, isPlain());
@@ -67,6 +130,9 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
   let vendorOwnsTerminal = false, resizedDuringHandoff = false; const heldMessages = [];
   // Rich scrollback streams each finished step as one line; the answer block then skips them.
   const streamed = { run: null, events: 0, steps: 0 };
+  // The identity header is live until the first transcript block, then committed once.
+  let headerLive = true, cursorHidden = false;
+  const directory = () => session.cwd === homedir() || session.cwd.startsWith(homedir() + "/") ? "~" + session.cwd.slice(homedir().length) : session.cwd;
   const history = []; let historyIndex = 0, historyDraft = "", historyAccount;
   const syncInput = (value, cursor = value === input.text ? input.cursor : value.length) => { suppressed = true; input.set(value); input.cursor = cursor; suppressed = false; };
   const focusChanged = () => {
@@ -82,15 +148,41 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
     if (!input.text || /^[\d, ]+$/.test(input.text)) return prompt.options;
     return prompt.options.filter(item => item.label.toLowerCase().includes(input.text.toLowerCase()));
   };
-  const frameView = () => ({ ...session.view(), version, channel,
+  const frameView = () => ({ ...session.view(), version, channel, header: headerLive, directory: directory(),
     focus: localPicker ?? session.prompt, choices: choices(), selected,
     palette: palette(), paletteSelected, loginAction });
+  const live = () => layout.richLayout(frameView(), input.text, input.cursor,
+    { columns: stdout.columns ?? 80, rows: stdout.rows ?? 24, color: theme, tick: prefs.reducedMotion ? null : tick });
   const draw = () => {
     clearTimeout(frameTimer); frameTimer = null;
     if (vendorOwnsTerminal) return;
-    if (!session.closed && !writer.plain) writer.draw(layout.richFrame(frameView(), input.text, input.cursor,
-      { columns: stdout.columns ?? 80, rows: stdout.rows ?? 24, color, tick: prefs.reducedMotion ? null : tick }));
+    if (!session.closed && !writer.plain) writer.draw(live());
   };
+  // The real cursor stays hidden in rich mode (the composer draws its own caret) and always
+  // returns on exit, error, plain fallback and vendor handoff.
+  const showCursor = visible => {
+    if (env.TERM === "dumb" || visible !== cursorHidden) return;
+    cursorHidden = !visible; stdout.write(visible ? "\x1b[0m\x1b[?25h" : "\x1b[?25l");
+  };
+  const restoreCursor = () => showCursor(true);
+  const commitHeader = () => {
+    if (writer.plain || !headerLive) return;
+    headerLive = false; writer.append(layout.richHeader(frameView(), stdout.columns ?? 80, theme).join("\n"));
+  };
+  // Transcript blocks (asks, answers, steps, usage) commit the header above them; notices printed
+  // before the first ask stay above the live identity, which keeps owning the current facts.
+  const print = (text, transcript = true) => {
+    if (transcript) commitHeader();
+    writer.append(text, writer.plain || session.closed || vendorOwnsTerminal ? null : live());
+  };
+  writer.onLocated = () => {
+    input.expectReports = false;
+    if (theme && reported.fg && reported.bg && theme === color) {
+      theme = layout.paletteTheme(reported, ["truecolor", "24bit"].includes(env.COLORTERM));
+    }
+    draw();
+  };
+  const locate = (query = "") => { if (!writer.plain) { input.expectReports ||= !!query; writer.locate(query); } };
   const schedule = () => { if (!frameTimer && !vendorOwnsTerminal) frameTimer = setTimeout(() => { frameTimer = null; draw(); }, 40); };
   const printPlainPrompt = prompt => writer.append(safe(`${prompt.title}\n${prompt.options.map((row, i) => `${i + 1}. ${row.label}`).join("\n")}\nEnter a choice; Esc returns to your draft.`));
   const maybeUpdate = () => {
@@ -111,8 +203,8 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
         if (event?.kind !== "step_finished") continue;
         const [row] = taskLines([event]);
         if (!row) continue;
-        if (!streamed.steps++) writer.append("");
-        writer.append(layout.richMessage({ kind: "step", text: row.split("\n").map(part => part.trim().replace(/^[▸·]\s*/, "")).filter(Boolean).join(" · ") }, stdout.columns ?? 80, color));
+        if (!streamed.steps++) print("");
+        print(layout.richMessage({ kind: "step", text: row.split("\n").map(part => part.trim().replace(/^[▸·]\s*/, "")).filter(Boolean).join(" · ") }, stdout.columns ?? 80, theme));
       }
     }
     if (process.connected && process.send && env.VECTEUR_UPDATE_SESSION && session.release?.compatible
@@ -146,13 +238,13 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
   });
   session.on("preferences", value => {
     prefs = value; rich = !options.plain && !prefs.plain && env.TERM !== "dumb";
-    writer.resized(isPlain()); session.change(); draw();
+    writer.resized(isPlain()); showCursor(writer.plain); locate(); session.change(); draw();
   });
   session.on("message", message => {
     if (vendorOwnsTerminal) { heldMessages.push(message); return; }
-    writer.append(writer.plain ? safe(message.text) : layout.richMessage(message, stdout.columns ?? 80, color,
-      { stepsShown: message.runId && message.runId === streamed.run ? streamed.steps : 0 }));
-    plainDraft = ""; draw();
+    print(writer.plain ? safe(message.text) : layout.richMessage(message, stdout.columns ?? 80, theme,
+      { stepsShown: message.runId && message.runId === streamed.run ? streamed.steps : 0 }), ["user", "answer", "cost"].includes(message.kind));
+    plainDraft = "";
   });
   session.on("copy", answer => {
     if (vendorOwnsTerminal) return;
@@ -218,7 +310,7 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
     clearTimeout(frameTimer); frameTimer = null; clearInterval(clockTimer); clockTimer = null;
     stdin.off("data", onData); stdin.setRawMode(false); stdin.pause();
     process.off("SIGINT", onSignal);
-    writer.clearLive(); if (env.TERM !== "dumb") stdout.write("\x1b[?2004l");
+    writer.clearLive(); commitHeader(); showCursor(true); if (env.TERM !== "dumb") stdout.write("\x1b[?2004l");
     const { VENDORS, executingServer, runVendor, vendorArgv } = await import("./vendors.js");
     writer.append(`Opening your ${VENDORS[vendor]} terminal with Vecteur attached for this session only. Exit it to return.`);
     let note;
@@ -231,6 +323,8 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
       if (env.TERM !== "dumb") stdout.write("\x1b[?2004h");
       stdin.setRawMode(true); stdin.resume(); stdin.on("data", onData);
     }
+    // The vendor's output is history now; find where it left the cursor before drawing again.
+    writer.resized(isPlain()); showCursor(writer.plain); locate();
     if (resizedDuringHandoff) { resizedDuringHandoff = false; onResize(); }
     for (const message of heldMessages.splice(0)) session.emit("message", message);
     session.message(note); session.change();
@@ -295,7 +389,13 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
     return false;
   };
   input.on("details", () => { if (!session.prompt) void execute("/details"); });
-  input.on("redraw", () => { writer.clearLive(); draw(); });
+  input.on("redraw", () => { writer.clearLive(); locate(); draw(); });
+  input.on("report", report => {
+    const position = /^\x1b\[(\d+);(\d+)R$/.exec(report);
+    if (position) { writer.located(Number(position[1]), Number(position[2])); return; }
+    const value = /^\x1b\]1([01]);rgb:([0-9a-f]+)\/([0-9a-f]+)\/([0-9a-f]+)/i.exec(report);
+    if (value) reported[value[1] === "0" ? "fg" : "bg"] = value.slice(2).map(hex => Math.round(parseInt(hex, 16) / (16 ** hex.length - 1) * 255));
+  });
   input.on("exit", () => { try { session.close(); } catch (error) { session.report(error); } });
   const onData = chunk => {
     if (env.TERM === "dumb" && !input.pasting && (String(chunk).match(/[\r\n]/g)?.length ?? 0) > 1) {
@@ -307,8 +407,8 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
     // The vendor owns the TTY: not one byte; the new geometry is applied once on restore.
     if (vendorOwnsTerminal) { resizedDuringHandoff = true; return; }
     const plain = isPlain(), changed = plain !== writer.plain;
-    writer.resized(plain); lastPlainIdentity = "";
-    if (changed) writer.append(plain ? "Plain view — terminal is small; all actions remain available." : "Rich view restored.");
+    writer.resized(plain); lastPlainIdentity = ""; showCursor(plain); locate();
+    if (changed) print(plain ? "Plain view — terminal is small; all actions remain available." : "Rich view restored.", false);
     session.change(); draw();
   };
   const onSignal = () => { try { session.close(); } catch {} };
@@ -316,15 +416,17 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
   stdin.setRawMode(true); stdin.resume(); stdin.on("data", onData); stdout.on("resize", onResize);
   process.once("SIGTERM", onSignal); process.once("SIGHUP", onSignal); process.once("SIGINT", onSignal);
   if (env.TERM !== "dumb") stdout.write("\x1b[?2004h");
-  writer.append(writer.plain ? `Vecteur ${version}${channel === "preview" ? " · Preview" : ""} · ${safe(session.origin)}` : layout.welcome(version, session.origin, stdout.columns ?? 80, color, channel,
-    session.cwd.startsWith(homedir() + "/") ? "~" + session.cwd.slice(homedir().length) : session.cwd));
+  process.on("exit", restoreCursor);
+  if (writer.plain) writer.append(`Vecteur ${version}${channel === "preview" ? " · Preview" : ""} · ${safe(session.origin)}`);
+  else { showCursor(false); locate(color ? "\x1b]10;?\x1b\\\x1b]11;?\x1b\\" : ""); }
   draw();
   void session.initialize().then(() => { if (!input.text) syncInput(session.draft); draw(); }).catch(error => session.report(error));
   try { await done; }
   finally {
     clearTimeout(frameTimer); clearInterval(clockTimer); input.close(); stdin.off("data", onData); stdout.off("resize", onResize);
     process.off("SIGTERM", onSignal); process.off("SIGHUP", onSignal); process.off("SIGINT", onSignal);
-    writer.clearLive(); if (env.TERM !== "dumb") stdout.write("\x1b[?2004l");
+    writer.clearLive(); writer.close(); commitHeader(); showCursor(true); process.off("exit", restoreCursor);
+    if (env.TERM !== "dumb") stdout.write("\x1b[?2004l");
     stdin.setRawMode(false); stdin.pause();
     stdout.write(session.restart ? "Restarting Vecteur…\n" : session.run?.open ? "Detached. The cloud Run continues; run vecteur here to follow it.\n" : "Session closed.\n");
   }

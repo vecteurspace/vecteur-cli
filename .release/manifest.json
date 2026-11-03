@@ -2,7 +2,7 @@
   "files": {
     ".github/workflows/release.yml": {
       "mode": 420,
-      "sha256": "db7d617f0bda151426ec86370a6aac5b34448a180dc5153312e0d8f47d244e7c"
+      "sha256": "40f8fd87f2b3d2791c11b110371f01fc8b8698bfb5e2c3d1ee7f89e6ac6ad7e7"
     },
     ".release/verify.py": {
       "mode": 420,
@@ -18,7 +18,7 @@
     },
     "package.json": {
       "mode": 420,
-      "sha256": "1ebeedb470b5c2a8da6cc8114043d2f285c30445d491e6b04413f829e3d5c477"
+      "sha256": "f6b8888714641e7b1b32dd648c4373421287a0266008daf0b0d9db497e2b72cd"
     },
     "src/blocks.js": {
       "mode": 420,
@@ -66,7 +66,7 @@
     },
     "src/input.js": {
       "mode": 420,
-      "sha256": "6f39009c1f736ad7761825c24b9fbba0e6bacd4271692989e815f4ce04c7cdfc"
+      "sha256": "9af93f1b1303074b11924f8a023ca742c3e434bd8d2fb54d5a89cfc6a680a61e"
     },
     "src/markdown.js": {
       "mode": 420,
@@ -86,7 +86,7 @@
     },
     "src/session.js": {
       "mode": 420,
-      "sha256": "93280520bbd9cd90c1a2a3ec09941a5bf2e1b2e927ad5c98d066ff094bfa60f2"
+      "sha256": "00d985a1516938dfa7f64708836e86b49ebc330c38925be37d6c598619ab90b0"
     },
     "src/store.js": {
       "mode": 420,
@@ -94,11 +94,11 @@
     },
     "src/terminal.js": {
       "mode": 420,
-      "sha256": "e7db9dd96e7b3e3911707cbb13fca177222e54cf3085f19f2d58f7ecf0c2b234"
+      "sha256": "6f9269e365aea09db82f3ad259728e81666571e8a3f2a1d5fd32e657e6dceb58"
     },
     "src/tui/view.js": {
       "mode": 420,
-      "sha256": "9d5e7776f0dcaaaa96273a4e7218024cbcb2d67397d7df7e31eedf9aeccea903"
+      "sha256": "70122baff1f257449ecde84f69e7318b21a8af1ace115fd1b969b0c4cb5d980e"
     },
     "src/update.js": {
       "mode": 420,
@@ -112,12 +112,12 @@
   "release": {
     "cli": {
       "contract_identity": "api-sha256:b78084db722fba9eb9c159fcc93b29d12db0760ded46263aca2ad2fcf97d6a3f;run-wire-sha256:7bc5c77a90d6093cff5179533d4f4b6326056057dd677740cac097ebc0c8fb54",
-      "integrity": "sha512-swYn06WCX51Q00XevqVFPtJ7c/sqhiz0LfDCyPhPp7cy2yeuOwf6Je/CJ9Ku2AQm6X6remFM8J1giQsx5FDJ7Q==",
+      "integrity": "sha512-tp+XRBnPA36IJV4zRJ1aJwsE3yQrkOVKHuKx73ehTgxEOHxFAknvI9ml7DU1eXmNtaYqb2h/ENx9vYu6QZu3hQ==",
       "package": "@vecteur/cli",
-      "version": "0.9.1"
+      "version": "0.10.0"
     },
     "schema": "release-cli.v1",
-    "tag": "v4.3.0"
+    "tag": "v4.3.1"
   },
   "tracked": [
     ".github/workflows/release.yml",
