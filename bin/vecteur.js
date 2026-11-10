@@ -1,16 +1,19 @@
 #!/usr/bin/env node
+import { Executor } from "../src/executor.js";
+import { withLocalLock, executionGrant, rootIdentity, qualify } from "../src/localfiles.js";
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 
 import {
   CliError, VecteurClient, admittedFailure, configuration, isStateHash, isTokenShaped, redact,
-  requestTimeout, resolveOrigin, shouldOpenBrowser, waitForDeviceAuthorization,
+  requestTimeout, resolveOrigin, shouldOpenBrowser, waitForDeviceAuthorization, isRequestKey, validateAnswers,
 } from "../src/client.js";
 import {
   clearCredentials, credentialsPath, readCredentials, setCurrentOrigin, writeCredentials, selectProject,
 } from "../src/credentials.js";
 import { downloadArtifact, downloadProjection, exportRun } from "../src/download.js";
 import { humanProjects, resolveNamed, resolveRunProject, resolveWorkspace } from "../src/projects.js";
-import { canonicalJson, currentTransferTables, human, humanCost, progress } from "../src/format.js";
+import { canonicalJson, currentTransferTables, human, stopViewOf, humanCost, progress } from "../src/format.js";
 import { openBrowser } from "../src/browser.js";
 
 function manifest() {
@@ -49,6 +52,9 @@ function helpText(version) {
   --help  --version  --json  --origin <url>  --no-browser  --offline  --plain  --no-color  --local  -p/--project  -a/--ask  --output <path>
   update [--check] [--yes] [--origin <url>] updates the executing installation
   run submit continues the Project's current head; --parent <state-hash> admits it only if that is still the head
+  run submit --no-wait --request-key K [--parent H|none] [--attach PATH…] -p ID -a ASK --json
+  run answer RUN --clarification ID --answers FILE|- --json
+  Claude Code/Codex recipe: submit --no-wait --parent H --request-key K --attach PATH…; run get / run events; run answer; run export
 `;
 }
 
@@ -77,11 +83,19 @@ function parseCommand(argv) {
     if (indexes.length > 1) throw new CliError("usage_invalid", "Invalid command grammar");
     if (indexes.length === 0) return undefined;
     const index = indexes[0];
-    if (!value(args[index + 1])) throw new CliError("usage_invalid", "Invalid command grammar");
+    if (!value(args[index + 1]) && !(names.includes("--answers") && args[index + 1] === "-")) throw new CliError("usage_invalid", "Invalid command grammar");
     const option = args[index + 1];
     args = args.filter((_, i) => i !== index && i !== index + 1);
     return option;
   };
+  const paths = [];
+  while (args.includes("--attach")) {
+    const index = args.indexOf("--attach");
+    let end = index + 1;
+    while (value(args[end])) paths.push(args[end++]);
+    if (end === index + 1) throw new CliError("usage_invalid", "--attach requires explicit paths");
+    args.splice(index, end - index);
+  }
   const version = takeFlag("--version");
   const help = takeFlag("--help");
   const json = takeFlag("--json");
@@ -97,7 +111,13 @@ function parseCommand(argv) {
   const workspace = takeOption("--workspace");
   const output = takeOption("--output");
   const parent = takeOption("--parent");
-  if (parent !== undefined && (!isStateHash(parent) || args[0] !== "run" || args[1] !== "submit")) {
+  const noWait = takeFlag("--no-wait"), requestKey = takeOption("--request-key");
+  const allowExec = takeFlag("--allow-exec");
+  if (allowExec && (noWait || requestKey !== undefined || args[0] !== "run" || args[1] !== "submit")) {
+    throw new CliError("usage_invalid", "--allow-exec requires foreground run submit, without --no-wait or --request-key; MCP has no local executor");
+  }
+  const clarification = takeOption("--clarification"), answers = takeOption("--answers");
+  if (parent !== undefined && (!(isStateHash(parent) || noWait && parent === "none") || args[0] !== "run" || args[1] !== "submit")) {
     throw new CliError("usage_invalid", "Invalid command grammar");
   }
   if (args.some((arg) => typeof arg === "string" && arg.startsWith("-"))) {
@@ -105,6 +125,21 @@ function parseCommand(argv) {
   }
   if (version) return { kind: "version" };
   if (help) return { kind: "help" };
+  if (noWait || requestKey !== undefined || paths.length || clarification !== undefined || answers !== undefined) {
+    const common = !noBrowser && !offline && !checkUpdate && !yesUpdate && !plain && !noColor && !local
+      && workspace === undefined && output === undefined;
+    if (common && args.length === 2 && args[0] === "run" && args[1] === "submit" && noWait
+        && value(ask) && clarification === undefined && answers === undefined) {
+      if (!isRequestKey(requestKey)) throw new CliError("request_key_invalid", "--request-key requires 8–64 letters, digits, _ or -");
+      return { kind: "run_start", projectId, ask, requestKey, parent: parent === "none" ? null : parent, paths, origin, json };
+    }
+    if (common && args.length === 3 && args[0] === "run" && args[1] === "answer" && value(args[2])
+        && value(clarification) && answers !== undefined && !noWait && requestKey === undefined && !paths.length
+        && projectId === undefined && ask === undefined && parent === undefined) {
+      return { kind: "run_answer", id: args[2], clarification, answers, origin, json };
+    }
+    throw new CliError("usage_invalid", "Invalid command grammar");
+  }
   if (args.length === 1 && args[0] === "update" && !json && !local && !offline && !plain && !noColor
       && !noBrowser && projectId === undefined && ask === undefined && workspace === undefined && output === undefined && parent === undefined) {
     return { kind: "update", origin, check: checkUpdate, yes: yesUpdate };
@@ -155,7 +190,7 @@ function parseCommand(argv) {
   }
   if (args.length === 2 && args[0] === "run" && args[1] === "submit"
       && (projectId === undefined || value(projectId)) && value(ask) && output === undefined) {
-    return { kind: "run_submit", projectId, ask, parent, origin, json };
+    return { kind: "run_submit", projectId, ask, parent, origin, json, allowExec };
   }
   if (args.length === 3 && args[0] === "run" && args[1] === "get" && value(args[2])
       && projectId === undefined && ask === undefined && output === undefined) {
@@ -276,6 +311,7 @@ async function whoami(command, env = process.env) {
 async function main() {
   refuseOldNode();
   const command = parseCommand(process.argv.slice(2));
+  if (command.allowExec) qualify();
   if (command.kind === "version") {
     process.stdout.write(`vecteur ${manifest().version}\n`);
     return;
@@ -391,15 +427,45 @@ async function main() {
       : `Downloaded ${value.bytes} bytes to ${value.path} (${value.content_type}; ${value.disposition})\n`);
     return;
   }
+  else if (command.kind === "run_start") {
+    const projectId = await resolveRunProject(client, command.projectId);
+    value = await client.runStartLocal(projectId, command.ask, { requestKey: command.requestKey,
+      parentStateHash: command.parent, paths: command.paths });
+    process.stdout.write(canonicalJson(value));
+    return;
+  }
+  else if (command.kind === "run_answer") {
+    let answers;
+    try { answers = JSON.parse(readFileSync(command.answers === "-" ? 0 : command.answers, "utf8")); }
+    catch { throw new CliError("answers_invalid", "--answers must name a readable JSON answer array, or - for stdin"); }
+    value = await client.clarificationAnswer(command.id, command.clarification, validateAnswers(answers));
+    process.stdout.write(canonicalJson(value));
+    return;
+  }
   else if (command.kind === "run_submit") {
     const projectId = await resolveRunProject(client, command.projectId);
-    value = await client.runSubmit(projectId, command.ask, onEvent, undefined, command.parent);
+    let executor;
+    if (command.allowExec) {
+      const project = await client.projectGet(projectId);
+      const pin = { origin: client.config.origin, accountId: "credential:" + createHash("sha256").update(client.config.token).digest("hex"), projectId, role: project.role,
+        root: rootIdentity(process.cwd()), provenance: "invocation", credential: { token: client.config.token,
+          kind: process.env.VECTEUR_TOKEN ? "environment" : "stored" } };
+      const grant = await withLocalLock(() => executionGrant(pin));
+      executor = new Executor({ client, grant, pin: () => pin, session: true });
+    }
+    value = await client.runSubmit(projectId, command.ask, onEvent, undefined, command.parent, undefined, undefined, executor);
     if (!command.json) {
       try {
         const currentTransferIds = await verifiedTransferIds(client, value);
-        process.stdout.write(human(value, { projectId, currentTransferIds }));
-        const cost = await client.customerCost(projectId);
-        process.stdout.write(`\n${humanCost(cost)}`);
+        const stopped = stopViewOf(value.events);
+        const stopOffer = stopped ? await client.stopOffer(value.run_id) : undefined;
+        if (stopped?.cause === "plan_limit") await client.stopEvent(value.run_id, { event: "shown", surface: "cli" });
+        process.stdout.write(human(value, { projectId, currentTransferIds, stopOffer, origin: config.origin }));
+        // A stop states the limit that fired; "22 % used" below it reads as a contradiction (record §3). `vecteur` usage stays one command away.
+        if (!stopped) {
+          const cost = await client.customerCost(projectId);
+          process.stdout.write(`\n${humanCost(cost)}`);
+        }
       } catch (error) {
         throw admittedFailure(error, value.run_id);
       }
@@ -412,6 +478,12 @@ async function main() {
   }
   if (!command.json && Array.isArray(value?.events)) {
     renderOptions.currentTransferIds = await verifiedTransferIds(client, value);
+    const stopped = stopViewOf(value.events);
+    if (stopped) {
+      renderOptions.stopOffer = await client.stopOffer(value.run_id);
+      if (stopped.cause === "plan_limit") await client.stopEvent(value.run_id, { event: "shown", surface: "cli" });
+    }
+    renderOptions.origin = config.origin;
   }
   process.stdout.write(command.json ? canonicalJson(value) : human(value, renderOptions));
 }
@@ -427,8 +499,33 @@ async function verifiedTransferIds(client, run) {
   return ids;
 }
 
+// Skip option values when identifying the new doors: a legacy ask containing "answer"
+// must still print the legacy error bytes, including on a parser/configuration failure.
+function lifecycleInvocation(argv) {
+  const tokens = [];
+  let noWait = false;
+  const options = new Set(["--origin", "--project", "-p", "--ask", "-a", "--workspace", "--output", "--parent",
+    "--request-key", "--clarification", "--answers"]);
+  for (let i = 0; i < argv.length; i++) {
+    if (options.has(argv[i])) { i++; continue; }
+    if (argv[i] === "--no-wait") { noWait = true; continue; }
+    if (argv[i] === "--attach") {
+      while (i + 1 < argv.length && !argv[i + 1].startsWith("-")) i++;
+      continue;
+    }
+    if (!argv[i].startsWith("-")) tokens.push(argv[i]);
+  }
+  return tokens[0] === "run" && (tokens[1] === "answer" || tokens[1] === "submit" && noWait);
+}
+
 main().catch((error) => {
   const code = error instanceof CliError ? error.code : "internal_error";
-  process.stderr.write(`${code}: ${redact(error?.message ?? "CLI failed")}\n`);
+  const argv = process.argv.slice(2);
+  const structured = lifecycleInvocation(argv);
+  const message = redact(error?.message ?? "CLI failed");
+  const details = Object.fromEntries(["run_id", "request_key", "parent_state_hash"]
+    .filter(field => error instanceof CliError && Object.hasOwn(error, field))
+    .map(field => [field, typeof error[field] === "string" ? redact(error[field]) : error[field]]));
+  process.stderr.write(structured ? canonicalJson({ code, message, ...details }) : `${code}: ${message}\n`);
   process.exitCode = code === "usage_invalid" ? 2 : 1;
 });

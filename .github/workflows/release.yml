@@ -20,7 +20,7 @@ jobs:
       - run: npm install --global npm@12.2.0 --ignore-scripts
       - run: python3 .release/verify.py
       - run: npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP"
-      - run: python3 .release/verify.py "$RUNNER_TEMP/vecteur-cli-0.10.0.tgz"
-      - run: npm publish "$RUNNER_TEMP/vecteur-cli-0.10.0.tgz" --provenance --access public --ignore-scripts --tag candidate
+      - run: python3 .release/verify.py "$RUNNER_TEMP/vecteur-cli-0.11.1.tgz"
+      - run: npm publish "$RUNNER_TEMP/vecteur-cli-0.11.1.tgz" --provenance --access public --ignore-scripts --tag candidate
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

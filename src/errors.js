@@ -7,8 +7,11 @@
  * shared vocabulary, so it owns a file and neither side reaches through the other.
  */
 export class CliError extends Error {
-  constructor(code, message) {
+  constructor(code, message, details = {}) {
     super(message);
     this.code = code;
+    for (const field of ["run_id", "request_key", "parent_state_hash"]) {
+      if (Object.hasOwn(details, field)) this[field] = details[field];
+    }
   }
 }

@@ -2,7 +2,7 @@
   "files": {
     ".github/workflows/release.yml": {
       "mode": 420,
-      "sha256": "40f8fd87f2b3d2791c11b110371f01fc8b8698bfb5e2c3d1ee7f89e6ac6ad7e7"
+      "sha256": "dc5307429dab17da7ead8c854cd1229bdc8a3aa21469ff1186f8bac9f6f0a6d3"
     },
     ".release/verify.py": {
       "mode": 420,
@@ -10,19 +10,19 @@
     },
     "README.md": {
       "mode": 420,
-      "sha256": "e23227320c8c8d7460380a751a9448b69b0436cf1057fed3aca8fb8fecf1fe72"
+      "sha256": "f4bce193a758b6bc2f31f7415b4a27f21b8c26b76c7a61425e9f09c893406a08"
     },
     "bin/vecteur.js": {
       "mode": 493,
-      "sha256": "4f3aaf6a8fd52fa1f37a95b572dfe0f89eb6f0071ae84c09f544bb2d9a69822d"
+      "sha256": "90402e144c5ca3ad896657e4015ca90631309aebbb6d532ea030b0cb6085fde9"
     },
     "package.json": {
       "mode": 420,
-      "sha256": "f6b8888714641e7b1b32dd648c4373421287a0266008daf0b0d9db497e2b72cd"
+      "sha256": "89edd3a024c4df16878ce45774d8d24e64e83c735706334332c41663bf995af4"
     },
     "src/blocks.js": {
       "mode": 420,
-      "sha256": "d8fa74f5ef238ea66723ae5899c11d8971ee9c19118dc46cb26c0522dc721417"
+      "sha256": "91d1bb9d5ee1cb2c3040edf725afd2a56141474d59e1d43dfec27a2c8df0b9e3"
     },
     "src/browser.js": {
       "mode": 420,
@@ -30,19 +30,19 @@
     },
     "src/client.js": {
       "mode": 420,
-      "sha256": "7fc0a44259c5bcdbb701f5b3e7436bf519cf30af5150284270e864ba12813d6e"
+      "sha256": "cf3548c3c5068eabdf8af137194e04cbbbd93bf922573248c06e6d2aa693538c"
     },
     "src/commands.js": {
       "mode": 420,
-      "sha256": "9685881d0d05127d0dc529b776a4d6d1043d8cb1d10cfddb91bf181b7487d7a1"
+      "sha256": "374aa0fc4543f90369ee04eb97f2eca4afd1a97c51cd46e2482a6a205f4c0065"
     },
     "src/contract.js": {
       "mode": 420,
-      "sha256": "163284d2f86953df84685d9b87908eb5c048127e58b10fcc8344329a50cc417d"
+      "sha256": "239da4958c5d5df5445b7c726fd6d03752ec5040a05e0224dfaf7ad5559eff2f"
     },
     "src/credentials.js": {
       "mode": 420,
-      "sha256": "44a07bdb12fc15860bfb11236973aef9197e30dd771bee7fae4db5aed7bced10"
+      "sha256": "4fc930102b82c4371ac1ddb26da9f9d2a79ed70c30999b2604cf4c264fb9adb1"
     },
     "src/diagnostics.js": {
       "mode": 420,
@@ -54,19 +54,31 @@
     },
     "src/errors.js": {
       "mode": 420,
-      "sha256": "600cb777a263cfa79171eddc1cd5180f9d7e6ba633badcc6dbcaba110fb9e175"
+      "sha256": "a5c5727ffc3e973f807293bfca1bd14bb3fc2299a76790f7cb45d4f0e55c16db"
+    },
+    "src/exchange.js": {
+      "mode": 420,
+      "sha256": "5f8040120442cdb3915857f33204ad530f90b90d3417bffb0efbef267e684861"
+    },
+    "src/executor.js": {
+      "mode": 420,
+      "sha256": "52c2f204cfbc6a8ed503c7854824628033b1094c9aed17dac74ec0d958bdb639"
     },
     "src/folders.js": {
       "mode": 420,
-      "sha256": "18bfc044204b6e4a253c061a86644c434f38a17d2be7076f02fa815edb6083c2"
+      "sha256": "2750a3b1308b147e2afbb02210321cbb6b0a29ab96c4a40dcdcbb4984bd9ca2c"
     },
     "src/format.js": {
       "mode": 420,
-      "sha256": "f17c3fd167f20ccdcf0eda93c4d4e2ae66ed2fcfa465744879491f50fe0d0d29"
+      "sha256": "2f7edabf8be5b09e70fe0613a591ffa72e043d162fced402ed97c70b7ac54e0f"
     },
     "src/input.js": {
       "mode": 420,
-      "sha256": "9af93f1b1303074b11924f8a023ca742c3e434bd8d2fb54d5a89cfc6a680a61e"
+      "sha256": "6d8e0127728b5cd5e875fc7cfed0adfac638b69f678be9b0565fc4a857ab9505"
+    },
+    "src/localfiles.js": {
+      "mode": 420,
+      "sha256": "806ea3d99d61218097db29550f3879ad2b21c3ad4bad3e7265270f0fa39da478"
     },
     "src/markdown.js": {
       "mode": 420,
@@ -74,11 +86,15 @@
     },
     "src/mcp.js": {
       "mode": 420,
-      "sha256": "5ed83f2499ff15b294cb7ce2e31797a1df8bdca5f5f203fe795a4370af727760"
+      "sha256": "5f034f3b252af74fa055146174e76b0ae61c4e424cec50c96ba73200d71ff504"
     },
     "src/preferences.js": {
       "mode": 420,
       "sha256": "ad52852601748ffcd34639ca0cf06781d3f468a11f5d578ab146b392bfabdd6d"
+    },
+    "src/produce.js": {
+      "mode": 420,
+      "sha256": "fcd1cc8dcd2d63f56ccf7c1d42f68a9b400fe5055c088e28b1b9ecb524cd48fe"
     },
     "src/projects.js": {
       "mode": 420,
@@ -86,7 +102,7 @@
     },
     "src/session.js": {
       "mode": 420,
-      "sha256": "00d985a1516938dfa7f64708836e86b49ebc330c38925be37d6c598619ab90b0"
+      "sha256": "bf4f583a95a2fc28bf172f9c18b20f45bd355caa8159c5c9a4d245baf6ea6854"
     },
     "src/store.js": {
       "mode": 420,
@@ -94,11 +110,11 @@
     },
     "src/terminal.js": {
       "mode": 420,
-      "sha256": "6f9269e365aea09db82f3ad259728e81666571e8a3f2a1d5fd32e657e6dceb58"
+      "sha256": "80e1b13a80cf4b19195027ea1187ef2e48c4ef32c905da4cf0daf459a66a1f3e"
     },
     "src/tui/view.js": {
       "mode": 420,
-      "sha256": "70122baff1f257449ecde84f69e7318b21a8af1ace115fd1b969b0c4cb5d980e"
+      "sha256": "56769fb586cd3555da37541ca55372b3ff27f65ebd4d1a42abbeecd10ef046b4"
     },
     "src/update.js": {
       "mode": 420,
@@ -111,13 +127,13 @@
   },
   "release": {
     "cli": {
-      "contract_identity": "api-sha256:b78084db722fba9eb9c159fcc93b29d12db0760ded46263aca2ad2fcf97d6a3f;run-wire-sha256:7bc5c77a90d6093cff5179533d4f4b6326056057dd677740cac097ebc0c8fb54",
-      "integrity": "sha512-tp+XRBnPA36IJV4zRJ1aJwsE3yQrkOVKHuKx73ehTgxEOHxFAknvI9ml7DU1eXmNtaYqb2h/ENx9vYu6QZu3hQ==",
+      "contract_identity": "api-sha256:c95d404a75b061156aeda270031aceedd19c61986c33deb1fabbd28e0fbf5696;run-wire-sha256:7c2d13df2194f3c86af423596cae09185d771bd6c0cdf2852ec63b79f94cafe9",
+      "integrity": "sha512-kR0aUWLmXsnR/6+K7iy/RmXGp9nTiB5QZVaXzgj2Liq3vuiATjDrvHhjvjrkLwzIVY+v2lhlUv8utzOf8ss2Sg==",
       "package": "@vecteur/cli",
-      "version": "0.10.0"
+      "version": "0.11.1"
     },
     "schema": "release-cli.v1",
-    "tag": "v4.3.1"
+    "tag": "v5.1.0"
   },
   "tracked": [
     ".github/workflows/release.yml",
@@ -135,12 +151,16 @@
     "src/diagnostics.js",
     "src/download.js",
     "src/errors.js",
+    "src/exchange.js",
+    "src/executor.js",
     "src/folders.js",
     "src/format.js",
     "src/input.js",
+    "src/localfiles.js",
     "src/markdown.js",
     "src/mcp.js",
     "src/preferences.js",
+    "src/produce.js",
     "src/projects.js",
     "src/session.js",
     "src/store.js",

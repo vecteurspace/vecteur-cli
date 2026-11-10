@@ -1,14 +1,19 @@
+import { withAdmissionLock, admissionIntent, admissionResolved, unresolvedAdmissions, selectInvocationFiles } from "./localfiles.js";
 import { createHash, randomUUID } from "node:crypto";
+import { closeSync, fsyncSync, linkSync, openSync, unlinkSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 
 import {
   ARTIFACT_MEDIA_TYPES, EVENT_KINDS, OWNER_CONTRACT_IDENTITY, RETIRED_EVENT_KINDS, validateAdmitted,
   validateCliRelease, validateCustomerCostProjection, validateDeviceAuthorization, validateLimitDenial,
   validatePatCreated, validateProject, validateRunAck, validateAccount, validateQuotaDenial,
-  RECOVERY_ACTIONS, validateRunControl, validateSource, validateSourceOffer,
+  RECOVERY_ACTIONS, validateRunStopOffer, validateRunControl, validateSource, validateSourceOffer,
+  AGENT_LABELS, CHILD_WIRE_VERSIONS, SPECIALIST_TOOL_WIRE_VERSION, LOCAL_EXEC_WIRE_VERSION, STORED_WIRE_VERSIONS, WIRE_READER_HEADER, WIRE_READER_VERSION, WIRE_VERSION_UNSUPPORTED,
 } from "./contract.js";
-import { readCredentials } from "./credentials.js";
+import { credentialsPath, readCredentials } from "./credentials.js";
+import { readStore, writeStore } from "./store.js";
 import { CliError } from "./errors.js";
-import { canonicalJson } from "./format.js";
+import { canonicalJson, capabilityCall } from "./format.js";
 
 // Re-exported so every existing importer keeps its one import site; `errors.js` owns the type.
 export { CliError };
@@ -31,6 +36,20 @@ export function isStateHash(value) {
   return typeof value === "string" && STATE_HASH_SHAPE.test(value);
 }
 
+export const isRequestKey = value => typeof value === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(value);
+
+export function validateAnswers(answers) {
+  if (!Array.isArray(answers) || !answers.length || !answers.every(answer =>
+    answer && typeof answer === "object" && !Array.isArray(answer)
+    && Object.keys(answer).every(key => ["id", "selected", "custom"].includes(key))
+    && typeof answer.id === "string" && answer.id.length > 0
+    && Array.isArray(answer.selected) && answer.selected.every(item => typeof item === "string")
+    && (answer.custom === undefined || answer.custom === null || typeof answer.custom === "string"))) {
+    throw new CliError("answers_invalid", "Expected an array of {id, selected: string[], custom?: string|null}");
+  }
+  return answers;
+}
+
 /**
  * A failure after the acknowledgement names the admitted Run, which may still be running:
  * retrying the submit would now continue its head and admit a second, billable turn.
@@ -39,10 +58,10 @@ export function admittedFailure(error, runId) {
   if (!(error instanceof CliError)) return error;
   if (error.code === "pat_expired") {
     return new CliError("pat_expired",
-      `credential expired after Run ${runId} was admitted; next: vecteur login; then: vecteur run get ${runId}`);
+      `credential expired after Run ${runId} was admitted; next: vecteur login; then: vecteur run get ${runId}`, { run_id: runId });
   }
   return new CliError(error.code,
-    `Run ${runId} was admitted and may still be running; next: vecteur run get ${runId}`);
+    `Run ${runId} was admitted and may still be running; next: vecteur run get ${runId}`, { run_id: runId });
 }
 
 export function redact(value) {
@@ -195,6 +214,65 @@ function exactObject(value, fields, code) {
   return value;
 }
 
+const CHILD_AGENTS = Object.keys(AGENT_LABELS).filter(agent => agent !== "engineering");
+const STORED_WIRE_VERSION_HEADER = "X-Vecteur-Stored-Wire-Version";
+
+/**
+ * RunWire v3 (v5 spec §4.1): a child row names its agent and the main row that delegated it,
+ * and exists only on a record the owner served at version 3 -- read from the record, never
+ * guessed from the rows. OPE owns the full nesting law; this reader refuses what it cannot
+ * render honestly: an unknown agent, a parent it never saw, or a child row on a v1/v2 record.
+ */
+export function validateChildRows(events, storedVersion) {
+  const check = rowGuard(storedVersion);
+  events.forEach(check);
+  return events;
+}
+
+/**
+ * The same law, one event at a time: the streaming path runs it BEFORE it forwards a live event, and a reconnect
+ * seeds it with the events already received so the row context survives. A v5x `capability_tool` call must name
+ * an existing ROOT row and carry a closed family, an identifier and no child metadata at all.
+ */
+export function rowGuard(storedVersion) {
+  if (!STORED_WIRE_VERSIONS.includes(storedVersion)) {
+    throw new CliError("run_invalid", "Server returned an unknown stored RunWire version");
+  }
+  const opened = new Map();
+  return (event) => {
+    if (event.kind === "tool_call" && event.payload?.tool === "local_exec" && storedVersion < LOCAL_EXEC_WIRE_VERSION) throw new CliError("run_invalid", "Local command requires RunWire v5");
+    if (event.kind === "tool_call" && event.payload?.tool === "capability_tool") {
+      const payload = event.payload;
+      if (!capabilityCall(payload) || ["agent", "parent_step_id", "specialist_tool"].some(key => Object.hasOwn(payload, key))
+          || opened.get(payload.step_id) !== null) {
+        throw new CliError("run_invalid", "Server returned a malformed capability call");
+      }
+      return;
+    }
+    if (event.kind === "tool_call" && event.payload?.tool === "specialist_tool") {
+      // RunWire v4 (A8): a specialist family call, only on a v4 record, under an open row of its own agent.
+      const { agent, step_id: stepId, specialist_tool: tool } = event.payload;
+      if (storedVersion < SPECIALIST_TOOL_WIRE_VERSION || !CHILD_AGENTS.includes(agent)
+          || opened.get(stepId) !== agent || typeof tool !== "string" || !tool) {
+        throw new CliError("run_invalid", "Server returned a malformed specialist call");
+      }
+      return;
+    }
+    if (event.kind !== "step_started" && event.kind !== "step_finished") return;
+    const { agent, parent_step_id: parent, step_id: stepId } = event.payload;
+    const child = agent !== undefined || parent !== undefined;
+    if (!child) {
+      if (event.kind === "step_started" && !opened.has(stepId)) opened.set(stepId, null);
+      return;
+    }
+    if (!CHILD_WIRE_VERSIONS.includes(storedVersion) || !CHILD_AGENTS.includes(agent) || typeof parent !== "string"
+        || opened.get(parent) !== null || (event.kind === "step_started" && opened.has(stepId))) {
+      throw new CliError("run_invalid", "Server returned a malformed child row");
+    }
+    if (event.kind === "step_started") opened.set(stepId, agent);
+  };
+}
+
 export function validateEvent(value, runId, expectedSeq) {
   exactObject(value, ["run_id", "seq", "kind", "payload"], "event_invalid");
   if (value.run_id !== runId || !Number.isInteger(value.seq) || value.seq !== expectedSeq ||
@@ -235,7 +313,33 @@ export function validateEvidenceDag(value, runId) {
   return value;
 }
 
-export async function parseSse(response, runId, onEvent = null, startSeq = 0) {
+/**
+ * The material a submit selects: the composer's exact shape (one exact-extract selection per
+ * attached source, both lists in source order). Absent keeps the Project's carried sources.
+ */
+export function submissionMaterial(selections) {
+  if (selections === undefined) return { attachments: [] };
+  const key = (s) => `${s.source_handle.cas_ref}\n${s.source_handle.acquisition_ref}`;
+  if (!Array.isArray(selections) || selections.length === 0 || !selections.every(s =>
+    exactKeys(s, ["source_handle", "offer_id", "selected_extract_ids", "method"])
+    && exactKeys(s.source_handle, ["cas_ref", "acquisition_ref"])
+    && /^sha256:[0-9a-f]{64}$/.test(s.source_handle.cas_ref) && typeof s.source_handle.acquisition_ref === "string"
+    && s.source_handle.acquisition_ref.length > 0 && typeof s.offer_id === "string" && s.offer_id.length > 0
+    && Array.isArray(s.selected_extract_ids) && s.selected_extract_ids.length > 0
+    && s.selected_extract_ids.every(id => typeof id === "string" && id.length > 0)
+    && new Set(s.selected_extract_ids).size === s.selected_extract_ids.length
+    && s.method === "exact-extract") || new Set(selections.map(key)).size !== selections.length) {
+    throw new CliError("selection_invalid",
+      "Each selection is {source_handle, offer_id, selected_extract_ids, method: exact-extract}, one per source");
+  }
+  const sorted = [...selections].sort((a, b) => key(a).localeCompare(key(b))).map(s => ({
+    source_handle: { cas_ref: s.source_handle.cas_ref, acquisition_ref: s.source_handle.acquisition_ref },
+    offer_id: s.offer_id, selected_extract_ids: [...s.selected_extract_ids].sort(), method: s.method,
+  }));
+  return { attachments: sorted.map(s => ({ ...s.source_handle })), selections: sorted };
+}
+
+export async function parseSse(response, runId, onEvent = null, startSeq = 0, guard = null) {
   if (!Number.isSafeInteger(startSeq) || startSeq < 0 || startSeq >= MAX_EVENTS) {
     throw new CliError("cursor_invalid", "Event cursor is outside the supported history bound");
   }
@@ -291,6 +395,7 @@ export async function parseSse(response, runId, onEvent = null, startSeq = 0) {
           throw new CliError("sse_invalid", "SSE metadata disagrees with event data");
         }
         events.push(validateEvent(refuseSecretValue(value), runId, startSeq + events.length));
+        guard?.(events.at(-1));
         await onEvent?.(events.at(-1));
         if (startSeq + events.length > MAX_EVENTS) throw new CliError("response_too_large", "Event count exceeds limit");
         terminalSeen = events.at(-1).kind === "terminal";
@@ -360,6 +465,9 @@ export class VecteurClient {
           ...(accept ? { Accept: accept } : {}),
           ...(acceptEncoding ? { "Accept-Encoding": acceptEncoding } : {}),
           ...(lastEventId === undefined ? {} : { "Last-Event-ID": String(lastEventId) }),
+          // RunWire v3 (v5 §4.1): this reader reads every declared stored version; without the
+          // header the origin treats a client as a v2 reader and refuses a child-enabled Run.
+          ...(!anonymousReadiness ? { [WIRE_READER_HEADER]: String(WIRE_READER_VERSION) } : {}),
         },
         body: rawBody ?? (body === undefined ? undefined : JSON.stringify(body)),
       });
@@ -425,11 +533,19 @@ export class VecteurClient {
               const reset = new Date(limit.reset_at * 1000).toISOString().replace(".000Z", "Z");
               ownerMessage = `Customer cost limit reached; binding=${binding}; reset=${reset} UTC; next=${limit.recovery.join(",")}`;
             }
+            if (candidate === WIRE_VERSION_UNSUPPORTED) {
+              ownerMessage = "this Run is stored in a RunWire version this CLI cannot read; next: vecteur update";
+            }
             if (["pat_expired", "pat_invalid", "pat_revoked"].includes(candidate)) {
               ownerMessage = "credential is expired or revoked; next: vecteur login";
             }
             if (candidate === "pat_ancestry_inactive") {
               ownerMessage = "seat or Organization is inactive; next: contact your Organization owner or Vecteur support";
+            }
+            // A38: the run door names the Produce entry it keeps off, in product words; the CLI holds no copy of the table.
+            if (candidate === "produce_unavailable" && typeof error.message === "string" && error.message.length > 0
+                && error.message.length <= 512 && !/[\r\n\0]/.test(error.message)) {
+              ownerMessage = error.message;
             }
             if (
               candidate === "client_outdated"
@@ -453,6 +569,7 @@ export class VecteurClient {
           code,
           ownerMessage || `Public API refused request with HTTP ${response.status}`,
         );
+        failure.status = response.status;
         if (admission) failure.admission = admission;
         throw failure;
       }
@@ -552,6 +669,22 @@ export class VecteurClient {
     const value = await this.#json("POST", `/api/runs/${encodeURIComponent(runId)}/controls`, { body: control, signal });
     if (!validateRunControl(value) || value.id !== control.id) throw new CliError("control_invalid", "Malformed control acknowledgement");
     return value;
+  }
+
+  async localExec(runId, body, requestId = null) {
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 2500);
+    try { return await this.#json("POST", `/api/runs/${encodeURIComponent(runId)}/local-exec${requestId ? '/'+encodeURIComponent(requestId) : ''}`, { body, signal: controller.signal }); }
+    finally { clearTimeout(timer); }
+  }
+
+  async runControls(runId, signal = undefined) {
+    const value = await this.#json("GET", `/api/runs/${encodeURIComponent(runId)}/controls`, { signal });
+    if (!exactKeys(value, ["controls"]) || !Array.isArray(value.controls) || value.controls.length > 32
+        || !value.controls.every(validateRunControl) || new Set(value.controls.map(c => c.id)).size !== value.controls.length
+        || value.controls.some((c, i) => i > 0 && c.sequence <= value.controls[i - 1].sequence)) {
+      throw new CliError("control_invalid", "Malformed controls projection");
+    }
+    return value.controls;
   }
 
   async clarificationAnswer(runId, questionId, answers, signal = undefined) {
@@ -668,6 +801,7 @@ export class VecteurClient {
       throw new CliError("request_failed",
         `origin ${this.config.origin}; cause=artifact_transport; next: check the network and retry`);
     } finally {
+      if (response.body && !response.body.locked) await response.body.cancel().catch(() => {});
       response[RELEASE_TIMEOUT]?.();
     }
   }
@@ -738,7 +872,7 @@ export class VecteurClient {
     }
     // Client-local presentation overlay, as in the web transcript. Never write this
     // timestamp into the immutable RunWire response or send it back to the server.
-    return newest ? { ...newest.response, accepted_at: newest.accepted_at } : null;
+    return newest ? { ...newest.response, accepted_at: newest.accepted_at, ask: newest.request.ask } : null;
   }
 
   async projectHistory(projectId, { limit = 25, before, signal } = {}) {
@@ -755,35 +889,127 @@ export class VecteurClient {
     return page;
   }
 
-  /**
-   * One turn, chained onto the Project's design head (OPE admits null only on a Project with no
-   * head, otherwise only the exact head). `parentStateHash` pins a compare-and-swap instead of
-   * reading the head. A 409 is re-read ONCE to name the head or the open Run, and never
-   * re-posted: the Idempotency-Key is per invocation, so a second POST is a second billable
-   * admission, written against a head the ask never saw.
-   */
-  async runSubmit(projectId, ask, onEvent = null, signal = undefined, parentStateHash = undefined) {
-    const parent = parentStateHash === undefined
-      ? (await this.projectNewestRun(projectId, signal))?.state_hash ?? null
-      : parentStateHash;
-    let value;
+  /** One bounded admission. Callers own the key; neither timeout nor conflict generates another. */
+  async runStart(projectId, ask, { requestKey, parentStateHash, attachments, selections, signal, intent, executor } = {}) {
+    let parent = parentStateHash;
     try {
-      value = await this.runAdmit(projectId,
-        { ask, attachments: [], parent_state_hash: parent, ui_context: null }, randomUUID(), signal);
+      if (!isRequestKey(requestKey)) throw new CliError("request_key_invalid", "request_key must be 8–64 letters, digits, _ or -");
+      if (parent !== undefined && parent !== null && !isStateHash(parent)) throw new CliError("parent_invalid", "Expected a state hash or null");
+      if (parent === undefined) parent = (await this.projectNewestRun(projectId, signal))?.state_hash ?? null;
+      let material = submissionMaterial(selections);
+      if (attachments !== undefined) {
+        if (!Array.isArray(attachments) || !attachments.every(handle => exactKeys(handle, ["cas_ref", "acquisition_ref"])
+            && /^sha256:[0-9a-f]{64}$/.test(handle.cas_ref) && typeof handle.acquisition_ref === "string" && handle.acquisition_ref.length)) {
+          throw new CliError("selection_invalid", "Attachments must be source handles");
+        }
+        if (selections !== undefined && canonicalJson(attachments) !== canonicalJson(material.attachments)) {
+          throw new CliError("selection_invalid", "Attachments must match the exact-extract selections");
+        }
+        material = { ...material, attachments };
+      }
+      const body = { ask, ...material, parent_state_hash: parent, ui_context: null,
+        ...(intent === undefined ? {} : { intent }), ...(executor ? { local_exec: executor.descriptor } : {}) };
+      return await withAdmissionLock(() => this.#startAdmission(projectId, body, requestKey, signal), this.localEnv ?? process.env);
+    } catch (error) { throw this.#startFailure(error, requestKey, parent); }
+  }
+
+  #startFailure(error, key, parent) {
+    if (!(error instanceof CliError)) throw error;
+    if (["idempotency_conflict", "submission_mismatch"].includes(error.code)) {
+      error = new CliError("admission_unresolved",
+        "This request key could not be reconciled; inspect the Project history before submitting another request");
+    }
+    error.request_key = key;
+    error.parent_state_hash = parent;
+    return error;
+  }
+
+  async #startAdmission(projectId, body, key, signal) {
+    const env = this.localEnv ?? process.env;
+    const id = body.local_exec ? null : admissionIntent(this.config.origin, projectId, key, body, env);
+    try {
+      const ack = await this.runAdmit(projectId, body, key, signal);
+      if (!validateRunAck(ack)) throw new CliError("run_ack_invalid", "Server returned malformed run acknowledgement");
+      if (id) admissionResolved(id, env);
+      return { ...ack, parent_state_hash: body.parent_state_hash };
     } catch (error) {
-      if (error instanceof CliError && (error.code === "state_fork" || error.code === "state_busy")) {
-        throw await this.#admissionRefused(error.code, projectId, parent, signal);
+      if (id && (error.admission === "refused" || ["state_fork", "state_busy"].includes(error.code))) admissionResolved(id, env);
+      if (error instanceof CliError && ["state_fork", "state_busy"].includes(error.code)) {
+        throw await this.#admissionRefused(error.code, projectId, body.parent_state_hash, signal);
       }
       throw error;
     }
-    if (!validateRunAck(value)) {
-      throw new CliError("run_ack_invalid", "Server returned malformed run acknowledgement");
-    }
+  }
+
+  /** CLI-only request freezing. The immutable file owns retries; no file read/selection occurs on reuse. */
+  async runStartLocal(projectId, ask, { requestKey, parentStateHash, paths = [], cwd = process.cwd(), signal } = {}) {
+    const env = this.localEnv ?? process.env;
+    let parent = parentStateHash;
     try {
-      return await this.runEvents(value.run_id, onEvent, signal);
+      if (!isRequestKey(requestKey)) throw new CliError("request_key_invalid", "request_key must be 8–64 letters, digits, _ or -");
+      if (parent !== undefined && parent !== null && !isStateHash(parent)) throw new CliError("parent_invalid", "Expected a state hash or null");
+      const intent = { origin: this.config.origin, project_id: projectId, ask,
+        parent_state_hash: parent ?? null, paths: [...new Set(paths.map(path => resolve(cwd, path)))].sort() };
+      const file = join(dirname(credentialsPath(env)), `request-${createHash("sha256").update(requestKey).digest("hex")}.json`);
+      return await withAdmissionLock(async () => {
+        // Convenience deliberately does not recover a body from disk or guess a Run from history.
+        const saved = readStore(file);
+        if (saved) {
+          if (parent === undefined || canonicalJson(saved.intent) !== canonicalJson(intent)) {
+            throw new CliError("request_key_reused", "This request key already names a different ask, parent, Project or attachment set");
+          }
+          if (saved.version !== 1 || saved.request_key !== requestKey || saved.body?.ask !== ask
+              || saved.body?.local_exec !== undefined
+              || saved.body?.parent_state_hash !== parent || saved.body?.ui_context !== null
+              || canonicalJson(submissionMaterial(saved.body?.selections)) !== canonicalJson({
+                attachments: saved.body?.attachments, ...(saved.body?.selections ? { selections: saved.body.selections } : {}) })) {
+            throw new CliError("request_file_invalid", "The frozen request is malformed; reconcile through Project history");
+          }
+          return this.#startAdmission(projectId, saved.body, requestKey, signal);
+        }
+        if (parent === undefined) parent = (await this.projectNewestRun(projectId, signal))?.state_hash ?? null;
+        if (unresolvedAdmissions(this.config.origin, projectId, env).some(row => row.key === requestKey)) {
+          throw new CliError("admission_unresolved", "No frozen request file is available; reconcile this key through Project history");
+        }
+        const selections = paths.length ? await selectInvocationFiles(this, projectId, paths, { cwd, env, signal }) : undefined;
+        const body = { ask, ...submissionMaterial(selections), parent_state_hash: parent, ui_context: null };
+        if (parentStateHash !== undefined) {
+          // writeStore fsyncs complete 0600 bytes; link publishes without replacing an existing key.
+          const temporary = `${file}.${randomUUID()}.tmp`;
+          try {
+            writeStore(temporary, { version: 1, request_key: requestKey, intent, body });
+            try { linkSync(temporary, file); }
+            catch (error) {
+              if (error.code === "EEXIST") throw new CliError("request_key_reused", "A request file already exists for this key; its bytes were preserved");
+              throw error;
+            }
+            const fd = openSync(dirname(file), "r");
+            try { fsyncSync(fd); } finally { closeSync(fd); }
+          } finally { try { unlinkSync(temporary); } catch (error) { if (error.code !== "ENOENT") throw error; } }
+        }
+        return this.#startAdmission(projectId, body, requestKey, signal);
+      }, env);
+    } catch (error) { throw this.#startFailure(error, requestKey, parent); }
+  }
+
+  /** The legacy blocking door retains its success record and error prose. */
+  async runSubmit(projectId, ask, onEvent = null, signal = undefined, parentStateHash = undefined,
+    selections = undefined, intent = undefined, executor = undefined) {
+    const value = await this.runStart(projectId, ask, { requestKey: randomUUID(), parentStateHash, selections, signal, intent, executor });
+    try {
+      const pump = executor?.pump(value.run_id).catch(() => executor.stop());
+      try { return await this.runEvents(value.run_id, onEvent, signal); }
+      finally { executor?.stop(); await pump; }
     } catch (error) {
       throw admittedFailure(error, value.run_id);
     }
+  }
+
+  async runStatus(runId, signal = undefined) {
+    const record = await this.runGet(runId, signal);
+    const latest = record.events.filter(event => event.kind === "clarification").at(-1)?.payload;
+    return { run_id: record.run_id, terminal: record.terminal, last_seq: record.events.at(-1)?.seq ?? -1,
+      clarification: latest?.state === "requested" ? latest : null };
   }
 
   async #admissionRefused(code, projectId, sent, signal) {
@@ -807,12 +1033,29 @@ export class VecteurClient {
     return new CliError(code, `nothing was admitted to Project ${projectId}; next: submit again`);
   }
 
+  /** What this reader may do about a stopped Run. The server decides; a failed read names no plan and never fails the Run. */
+  async stopOffer(runId, signal = undefined) {
+    try {
+      const value = await this.#json("GET", `/api/runs/${encodeURIComponent(runId)}/stop-offer`, { signal });
+      return validateRunStopOffer(value) && value.run_id === runId ? value : null;
+    } catch (error) {
+      if (error?.name === "AbortError") throw error;
+      return null;
+    }
+  }
+
+  /** The authenticated measurement door. Measurement never fails the reader's run. */
+  async stopEvent(runId, body, signal = undefined) {
+    try { await this.#json("POST", `/api/runs/${encodeURIComponent(runId)}/stop-offer/events`, { signal, body }); } catch (error) { if (error?.name === "AbortError") throw error; }
+  }
+
   async runGet(runId, signal = undefined) {
     const value = await this.#json("GET", `/api/runs/${encodeURIComponent(runId)}`, { signal });
     if (!validateAdmitted(value) || value.run_id !== runId) {
       throw new CliError("run_invalid", "Server returned malformed run record");
     }
     value.events.forEach((event, seq) => validateEvent(event, runId, seq));
+    validateChildRows(value.events, value.stored_wire_version);
     return value;
   }
 
@@ -832,12 +1075,19 @@ export class VecteurClient {
       lastEventId: priorEvents.length ? priorEvents.length - 1 : undefined,
     });
     let events;
+    let streamedVersion;
     try {
       const type = response.headers.get("content-type")?.split(";", 1)[0];
       if (type !== "text/event-stream") {
         throw new CliError("sse_invalid", "Event route is not an SSE stream");
       }
-      events = [...priorEvents, ...await parseSse(response, runId, onEvent, priorEvents.length)];
+      streamedVersion = Number(response.headers.get(STORED_WIRE_VERSION_HEADER));
+      if (!STORED_WIRE_VERSIONS.includes(streamedVersion)) {
+        throw new CliError("sse_invalid", "Event stream declares no known stored RunWire version");
+      }
+      const guard = rowGuard(streamedVersion);
+      priorEvents.forEach(guard);
+      events = [...priorEvents, ...await parseSse(response, runId, onEvent, priorEvents.length, guard)];
     } catch (error) {
       if (error?.name === "AbortError") {
         if (signal?.aborted) throw new CliError("request_cancelled", "Following the Run was detached");
@@ -853,7 +1103,8 @@ export class VecteurClient {
       throw new CliError("terminal_invalid", "Event stream has no final terminal event");
     }
     const direct = await this.runGet(runId, signal);
-    if (JSON.stringify(events) !== JSON.stringify(direct.events)) {
+    if (JSON.stringify(events) !== JSON.stringify(direct.events)
+        || streamedVersion !== direct.stored_wire_version) {
       throw new CliError("record_mismatch", "Event stream disagrees with direct replay");
     }
     const eventTerminal = events.at(-1).payload.state ?? events.at(-1).payload.terminal;

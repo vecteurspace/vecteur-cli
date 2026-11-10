@@ -1,7 +1,8 @@
 import { ComposerInput } from "./input.js";
 import { command, completions, SHORTCUTS } from "./commands.js";
 import { Session } from "./session.js";
-import { terminalText as safe, taskLines } from "./format.js";
+import { terminalText as safe, humanRunSections } from "./format.js";
+import { blockText } from "./blocks.js";
 import { preferences } from "./preferences.js";
 import { openBrowser } from "./browser.js";
 import { readFileSync } from "node:fs";
@@ -36,13 +37,21 @@ export class TerminalWriter {
     if (this.awaiting) this.since += rows;
     else if (this.row) this.row = Math.min(this.stdout.rows ?? 24, this.row + rows);
   }
-  progress(view) {
+  progress(view, { controlsOnly = false } = {}) {
     const subject = view.run?.subject?.id;
-    if (subject !== this.subject) { this.subject = subject; this.lastProgress = null; this.lastQuestion = null; }
+    if (subject !== this.subject) { this.subject = subject; this.lastProgress = null; this.lastQuestion = null; this.controls = new Map(); }
     if (!subject || view.run.terminal) return;
-    if (view.run.progress && view.run.progress !== this.lastProgress) {
+    if (!controlsOnly && view.run.progress && view.run.progress !== this.lastProgress) {
       this.append(safe(`${view.run.progress} · ${view.run.elapsed ?? "Elapsed unavailable"}`)); this.lastProgress = view.run.progress;
     }
+    for (const block of view.run.blocks ?? []) {
+      if (block.kind !== "control") continue;
+      const signature = JSON.stringify(block.payload);
+      if (this.controls.get(block.key) === signature) continue;
+      this.controls.set(block.key, signature);
+      this.append(safe(`Controls:\n${blockText(block)}`));
+    }
+    if (controlsOnly) return;
     const question = view.run.question;
     if (question?.id !== this.lastQuestion) {
       this.lastQuestion = question?.id;
@@ -110,7 +119,13 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
     if (!options.plain) throw error;
     prefs = { plain: true, reducedMotion: true };
   }
-  let rich = !options.plain && !prefs.plain && env.TERM !== "dumb";
+  let rich = stdout.isTTY === true && !options.plain && !prefs.plain && env.TERM !== "dumb";
+  let pasteMode = false;
+  const syncPasteMode = () => {
+    if (pasteMode === rich) return;
+    pasteMode = rich;
+    stdout.write(pasteMode ? "\x1b[?2004h" : "\x1b[?2004l");
+  };
   const color = !options.noColor && env.NO_COLOR === undefined;
   // Colour roles start palette-relative; a terminal that reports its own colours gets exact blends.
   let theme = color; const reported = {};
@@ -128,8 +143,8 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
   // While a vendor owns the TTY (handoff) Vecteur writes nothing: frames, clocks, streamed
   // steps and messages wait, and are flushed once when the vendor exits.
   let vendorOwnsTerminal = false, resizedDuringHandoff = false; const heldMessages = [];
-  // Rich scrollback streams each finished step as one line; the answer block then skips them.
-  const streamed = { run: null, events: 0, steps: 0 };
+  // Immutable event blocks commit once; mutable controls have their own live/final section.
+  const streamed = { run: null, keys: new Set() };
   // The identity header is live until the first transcript block, then committed once.
   let headerLive = true, cursorHidden = false;
   const directory = () => session.cwd === homedir() || session.cwd.startsWith(homedir() + "/") ? "~" + session.cwd.slice(homedir().length) : session.cwd;
@@ -161,7 +176,7 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
   // The real cursor stays hidden in rich mode (the composer draws its own caret) and always
   // returns on exit, error, plain fallback and vendor handoff.
   const showCursor = visible => {
-    if (env.TERM === "dumb" || visible !== cursorHidden) return;
+    if (env.TERM === "dumb" || !stdout.isTTY || visible !== cursorHidden) return;
     cursorHidden = !visible; stdout.write(visible ? "\x1b[0m\x1b[?25h" : "\x1b[?25l");
   };
   const restoreCursor = () => showCursor(true);
@@ -184,11 +199,19 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
   };
   const locate = (query = "") => { if (!writer.plain) { input.expectReports ||= !!query; writer.locate(query); } };
   const schedule = () => { if (!frameTimer && !vendorOwnsTerminal) frameTimer = setTimeout(() => { frameTimer = null; draw(); }, 40); };
-  const printPlainPrompt = prompt => writer.append(safe(`${prompt.title}\n${prompt.options.map((row, i) => `${i + 1}. ${row.label}`).join("\n")}\nEnter a choice; Esc returns to your draft.`));
+  const printPlainPrompt = prompt => writer.append(safe(`${prompt.card ?? prompt.title}\n${prompt.options.map((row, i) => `${i + 1}. ${row.label}`).join("\n")}\nEnter a choice; Esc returns to your draft.`));
   const maybeUpdate = () => {
     if (updateChecked || session.closed || session.offline || session.busy || session.prompt || session.loginChallenge || session.run?.open || session.registry?.state().pendingRun || session.registry?.state().pendingCreate || !session.release) return;
     updateChecked = true;
     void import("./update.js").then(({ interactiveUpdate }) => interactiveUpdate(session, { automatic: true })).catch(error => session.report(error));
+  };
+  const commitBlocks = (runId, blocks) => {
+    if (streamed.run !== runId) { streamed.run = runId; streamed.keys = new Set(); }
+    for (const block of blocks) {
+      if (!block.committed || ["control", "terminal"].includes(block.kind) || streamed.keys.has(block.key)) continue;
+      print(writer.plain ? blockText(block) : layout.richMessage({ kind: "block", block }, stdout.columns ?? 80, theme));
+      streamed.keys.add(block.key);
+    }
   };
   session.on("change", view => {
     if (vendorOwnsTerminal) return;
@@ -196,17 +219,8 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
     if (ticking && !clockTimer) clockTimer = setInterval(() => { tick++; draw(); }, prefs.reducedMotion ? 1000 : 200);
     if (!ticking) { clearInterval(clockTimer); clockTimer = null; }
     const run = session.run;
-    if (!writer.plain && run?.open && Array.isArray(run.events)) {
-      if (streamed.run !== run.run_id) Object.assign(streamed, { run: run.run_id, events: 0, steps: 0 });
-      for (; streamed.events < run.events.length; streamed.events++) {
-        const event = run.events[streamed.events];
-        if (event?.kind !== "step_finished") continue;
-        const [row] = taskLines([event]);
-        if (!row) continue;
-        if (!streamed.steps++) print("");
-        print(layout.richMessage({ kind: "step", text: row.split("\n").map(part => part.trim().replace(/^[▸·]\s*/, "")).filter(Boolean).join(" · ") }, stdout.columns ?? 80, theme));
-      }
-    }
+    if (!writer.plain && (stdout.rows ?? 24) < 18) writer.progress(view, { controlsOnly: true });
+    if (run?.open && Array.isArray(run.events)) commitBlocks(run.run_id, view.run.blocks);
     if (process.connected && process.send && env.VECTEUR_UPDATE_SESSION && session.release?.compatible
         && session.registry && (!view.busy || view.prompt)) {
       const nonce = env.VECTEUR_UPDATE_SESSION; delete env.VECTEUR_UPDATE_SESSION;
@@ -225,7 +239,9 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
       if (view.prompt && !activePrompt) snapshot = { text: input.text.startsWith("/") ? session.draft : input.text, cursor: input.cursor, undo: input.undo, killed: input.killed };
       activePrompt = view.prompt; selected = 0; focusChanged();
       if (activePrompt) {
-        input.undo = []; input.killed = ""; syncInput(""); if (writer.plain) printPlainPrompt(activePrompt);
+        input.undo = []; input.killed = ""; syncInput("");
+        if (writer.plain) printPlainPrompt(activePrompt);
+        else if (activePrompt.card) print(layout.richMessage({ kind: "notice", text: `${activePrompt.card}\n${activePrompt.options.map((row,i)=>`${i+1}. ${row.label}`).join("\n")}` }, stdout.columns ?? 80, theme), false);
       } else {
         const restored = snapshot && snapshot.text === session.draft ? snapshot : { text: session.draft, cursor: session.draft.length };
         syncInput(restored.text, Math.min(restored.cursor, restored.text.length)); input.undo = restored.undo ?? []; input.killed = restored.killed ?? ""; snapshot = null;
@@ -237,13 +253,23 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
     schedule(); queueMicrotask(maybeUpdate);
   });
   session.on("preferences", value => {
-    prefs = value; rich = !options.plain && !prefs.plain && env.TERM !== "dumb";
+    prefs = value; rich = stdout.isTTY === true && !options.plain && !prefs.plain && env.TERM !== "dumb";
+    syncPasteMode();
     writer.resized(isPlain()); showCursor(writer.plain); locate(); session.change(); draw();
   });
   session.on("message", message => {
     if (vendorOwnsTerminal) { heldMessages.push(message); return; }
-    print(writer.plain ? safe(message.text) : layout.richMessage(message, stdout.columns ?? 80, theme,
-      { stepsShown: message.runId && message.runId === streamed.run ? streamed.steps : 0 }), ["user", "answer", "cost"].includes(message.kind));
+    // Flush the terminal prefix too: unmatched calls close only in the final direct record.
+    if (message.kind === "answer" && message.sections?.blocks) commitBlocks(message.runId, message.sections.blocks);
+    const shownKeys = new Set(message.runId === streamed.run ? streamed.keys : []);
+    if (message.runId === writer.subject) {
+      for (const block of message.sections?.blocks ?? []) if (block.kind === "control"
+          && writer.controls?.get(block.key) === JSON.stringify(block.payload)) shownKeys.add(block.key);
+    }
+    const text = writer.plain ? message.kind === "answer" && message.sections
+      ? safe(humanRunSections(message.sections, { shownKeys })) : safe(message.text)
+      : layout.richMessage(message, stdout.columns ?? 80, theme, { shownKeys });
+    print(text, ["user", "answer", "turn-footer"].includes(message.kind));
     plainDraft = "";
   });
   session.on("copy", answer => {
@@ -310,7 +336,7 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
     clearTimeout(frameTimer); frameTimer = null; clearInterval(clockTimer); clockTimer = null;
     stdin.off("data", onData); stdin.setRawMode(false); stdin.pause();
     process.off("SIGINT", onSignal);
-    writer.clearLive(); commitHeader(); showCursor(true); if (env.TERM !== "dumb") stdout.write("\x1b[?2004l");
+    writer.clearLive(); commitHeader(); showCursor(true); if (pasteMode) stdout.write("\x1b[?2004l");
     const { VENDORS, executingServer, runVendor, vendorArgv } = await import("./vendors.js");
     writer.append(`Opening your ${VENDORS[vendor]} terminal with Vecteur attached for this session only. Exit it to return.`);
     let note;
@@ -320,7 +346,7 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
     finally {
       vendorOwnsTerminal = false;
       process.once("SIGINT", onSignal);
-      if (env.TERM !== "dumb") stdout.write("\x1b[?2004h");
+      if (pasteMode) stdout.write("\x1b[?2004h");
       stdin.setRawMode(true); stdin.resume(); stdin.on("data", onData);
     }
     // The vendor's output is history now; find where it left the cursor before drawing again.
@@ -342,6 +368,16 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
     selected = 0; focusChanged(); syncInput(""); if (writer.plain) printPlainPrompt(localPicker); draw();
   });
   input.on("complete", () => {
+    const mention = /(?:^|\s)@([^\s]*)$/.exec(input.text.slice(0,input.cursor));
+    if (mention && !session.prompt) {
+      const completionText=input.text, completionCursor=input.cursor;
+      void session.completeFiles(mention[1]).then(paths => {
+        if(input.text!==completionText || input.cursor!==completionCursor)return;
+        if (paths.length === 1) { input.replace(input.cursor-mention[1].length,input.cursor,paths[0]); draw(); }
+        else if (paths.length) session.message(paths.map(p=>'@'+p).join('\n'));
+      }).catch(error=>session.report(error));
+      return;
+    }
     const row = palette()[paletteSelected]; if (row) { syncInput(`/${row.name}${row.argument ? " " : ""}`); draw(); }
   });
   const cancel = () => {
@@ -398,10 +434,7 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
   });
   input.on("exit", () => { try { session.close(); } catch (error) { session.report(error); } });
   const onData = chunk => {
-    if (env.TERM === "dumb" && !input.pasting && (String(chunk).match(/[\r\n]/g)?.length ?? 0) > 1) {
-      input.insert(String(chunk).replace(/\r\n?/g, "\n")); return;
-    }
-    input.feed(chunk);
+    input.feed(chunk, { unbracketed: !pasteMode });
   };
   const onResize = () => {
     // The vendor owns the TTY: not one byte; the new geometry is applied once on restore.
@@ -415,7 +448,7 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
   const done = new Promise(resolve => session.once("close", resolve));
   stdin.setRawMode(true); stdin.resume(); stdin.on("data", onData); stdout.on("resize", onResize);
   process.once("SIGTERM", onSignal); process.once("SIGHUP", onSignal); process.once("SIGINT", onSignal);
-  if (env.TERM !== "dumb") stdout.write("\x1b[?2004h");
+  syncPasteMode();
   process.on("exit", restoreCursor);
   if (writer.plain) writer.append(`Vecteur ${version}${channel === "preview" ? " · Preview" : ""} · ${safe(session.origin)}`);
   else { showCursor(false); locate(color ? "\x1b]10;?\x1b\\\x1b]11;?\x1b\\" : ""); }
@@ -426,7 +459,7 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
     clearTimeout(frameTimer); clearInterval(clockTimer); input.close(); stdin.off("data", onData); stdout.off("resize", onResize);
     process.off("SIGTERM", onSignal); process.off("SIGHUP", onSignal); process.off("SIGINT", onSignal);
     writer.clearLive(); writer.close(); commitHeader(); showCursor(true); process.off("exit", restoreCursor);
-    if (env.TERM !== "dumb") stdout.write("\x1b[?2004l");
+    if (pasteMode) stdout.write("\x1b[?2004l");
     stdin.setRawMode(false); stdin.pause();
     stdout.write(session.restart ? "Restarting Vecteur…\n" : session.run?.open ? "Detached. The cloud Run continues; run vecteur here to follow it.\n" : "Session closed.\n");
   }

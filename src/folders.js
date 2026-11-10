@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep, parse } from "node:path";
+import { localMutation, endGrants } from "./localfiles.js";
 import { credentialsPath } from "./credentials.js";
 import { CliError } from "./errors.js";
 import { readStore, withStoreLock, writeStore } from "./store.js";
@@ -71,6 +72,7 @@ function readRegistry(file) {
 export class FolderRegistry {
   constructor({ origin, accountId, cwd = process.cwd(), env = process.env }) {
     if (!origin || !accountId) throw new CliError("folder_identity_invalid", "Origin and account are required");
+    this.env = env;
     this.origin = origin;
     this.accountId = accountId;
     this.folder = identity(cwd);
@@ -137,7 +139,13 @@ export class FolderRegistry {
 
   broadRoot() { return broadRoot(this.folder.path, this.home); }
 
-  bind(projectId, { confirmHome = false, confirmBroad = confirmHome } = {}) {
+  bind(projectId, options = {}) {
+    return localMutation('bind', { origin: this.origin, accountId: this.accountId, cwd: this.folder.path, args: [projectId, options] }, this.env, () => {
+      return this.bindLocked(projectId, options);
+    });
+  }
+
+  bindLocked(projectId, { confirmHome = false, confirmBroad = confirmHome } = {}) {
     this.requireAccount();
     if (typeof projectId !== "string" || !projectId) throw new CliError("project_invalid", "Choose a Project first");
     const broad = this.broadRoot();
@@ -149,6 +157,8 @@ export class FolderRegistry {
       if (row.pendingCreate || row.pendingRun) {
         throw new CliError("operation_unresolved", "Resolve the pending submission before relinking");
       }
+      // Validate first, then durably end authority before publishing the binding.
+      endGrants({ origin: this.origin, accountId: this.accountId, root: this.folder.path }, this.env);
       row.projectId = projectId;
       delete row.unlinked;
       delete row.pendingCreate;
@@ -156,11 +166,18 @@ export class FolderRegistry {
   }
 
   unlink() {
+    return localMutation('unlink', { origin: this.origin, accountId: this.accountId, cwd: this.folder.path, args: [] }, this.env, () => {
+      return this.unlinkLocked();
+    });
+  }
+
+  unlinkLocked() {
     return withStoreLock(this.file, () => {
       const store = this.#read();
       const row = store.folders[this.key];
       if (row?.pendingCreate || row?.pendingRun) throw new CliError("operation_unresolved",
         "Reconcile the pending submission before unlinking; its identity must survive");
+      endGrants({ origin: this.origin, accountId: this.accountId, root: this.folder.path }, this.env);
       store.folders[this.key] = { ...row, origin: this.origin, accountId: this.accountId, folder: this.folder, unlinked: true };
       delete store.folders[this.key].projectId;
       writeStore(this.file, store);
@@ -178,11 +195,19 @@ export class FolderRegistry {
   }
 
   completeCreation(key, projectId) {
-    this.#update(row => {
+    return localMutation('completeCreation', { origin: this.origin, accountId: this.accountId,
+      cwd: this.folder.path, args: [key, projectId] }, this.env, () => this.completeCreationLocked(key, projectId));
+  }
+
+  completeCreationLocked(key, projectId) {
+    return this.#update(row => {
       if (row.projectId === projectId && !row.pendingCreate) return;
       if (row.pendingCreate?.key !== key || typeof projectId !== "string" || !projectId) {
         throw new CliError("creation_mismatch", "Project creation identity changed");
       }
+      // Validation and idempotent completion precede revocation. Its recovery intent
+      // must be durable before the new binding can become visible to another terminal.
+      endGrants({ origin: this.origin, accountId: this.accountId, root: this.folder.path }, this.env);
       row.projectId = projectId;
       delete row.unlinked;
       delete row.pendingCreate;
@@ -241,6 +266,7 @@ export class FolderRegistry {
 
   reserveRun(projectId, body, draftRef = this.draftRef) {
     this.requireAccount();
+    if (body.local_exec !== undefined) throw new CliError('admission_unresolved', 'Execution consent cannot be frozen');
     return this.#update(row => {
       if (row.pendingRun) throw new CliError("submission_pending", "Another submission needs reconciliation before a new ask");
       row.pendingRun = { key: randomUUID(), projectId, body: structuredClone(body), draftRef: structuredClone(draftRef) };

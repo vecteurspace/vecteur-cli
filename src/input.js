@@ -5,7 +5,7 @@ const START = "\x1b[200~", END = "\x1b[201~";
 const MAX_BYTES = 256 * 1024;
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
-/** Stream decoder shared by both terminal views; paste is always one edit, never a send. */
+/** Stream decoder shared by both views; negotiated paste is one edit, never a send. */
 export class ComposerInput extends EventEmitter {
   constructor() {
     super(); this.text = ""; this.cursor = 0; this.pending = ""; this.pasting = false;
@@ -61,10 +61,14 @@ export class ComposerInput extends EventEmitter {
     this.checkpoint();
     this.text = value; this.cursor += text.length; this.emit("change", this.text);
   }
-  feed(bytes) {
+  feed(bytes, { unbracketed = false } = {}) {
     clearTimeout(this.escapeTimer);
     const epoch = this.focusEpoch;
-    this.pending += typeof bytes === "string" ? bytes : this.decoder.write(bytes);
+    let chunk = typeof bytes === "string" ? bytes : this.decoder.write(bytes);
+    // Unmarked multiline reads are drafts, including every trailing CR. A split read
+    // consisting only of CR/CRLF is indistinguishable from Enter without negotiation.
+    if (unbracketed) chunk = chunk === "\r\n" ? "\r" : chunk === "\r" ? chunk : chunk.replace(/\r\n?/g, "\n");
+    this.pending += chunk;
     while (this.pending) {
       if (this.pasting) {
         const end = this.pending.indexOf(END);

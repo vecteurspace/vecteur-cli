@@ -1,3 +1,4 @@
+import { localMutation, endGrants } from "./localfiles.js";
 import { rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -114,6 +115,13 @@ export function setCurrentOrigin(origin, env = process.env) {
 }
 
 export function clearCredentials(env = process.env, origin = undefined) {
+  return localMutation('credentials', { origin }, env, () => {
+    endGrants({ origin }, env);
+    return clearCredentialsLocked(env, origin);
+  });
+}
+
+function clearCredentialsLocked(env, origin) {
   return withStoreLock(credentialsPath(env), () => {
     const path = credentialsPath(env);
     if (origin === undefined) {

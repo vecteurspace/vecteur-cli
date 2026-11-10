@@ -1,6 +1,6 @@
 {
   "name": "@vecteur/cli",
-  "version": "0.10.0",
+  "version": "0.11.1",
   "type": "module",
   "bin": {
     "vecteur": "bin/vecteur.js"
@@ -12,12 +12,16 @@
     "src/contract.js",
     "src/credentials.js",
     "src/download.js",
+    "src/produce.js",
+    "src/exchange.js",
     "src/errors.js",
     "src/format.js",
     "src/mcp.js",
     "src/projects.js",
     "src/store.js",
     "src/folders.js",
+    "src/localfiles.js",
+    "src/executor.js",
     "src/browser.js",
     "src/blocks.js",
     "src/session.js",

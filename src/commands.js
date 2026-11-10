@@ -1,17 +1,20 @@
+import { withAdmissionLock } from "./localfiles.js";
 import { CliError } from "./errors.js";
-import { runView } from "./blocks.js";
+import { runView, runBlocks, blockText } from "./blocks.js";
 import { openBrowser } from "./browser.js";
 import { diagnose } from "./diagnostics.js";
-import { humanCost } from "./format.js";
+import { humanCost, terminalText } from "./format.js";
 import { preferences, savePreferences } from "./preferences.js";
 
 export const SHORTCUTS = `Enter sends when ready; while running it offers steering or keeps the draft.
 Alt+Enter / Ctrl+J newline; backslash then Enter is the portable fallback.
-Paste never sends. Tab completes commands; arrows select; Esc closes a menu.
+Bracketed paste never sends. Plain/dumb multiline chunks stay drafts; a split-read
+lone CR/CRLF is indistinguishable from Enter and can send.
+Tab completes commands; arrows select; Esc closes a menu.
 Home/End or Ctrl+A/E: line boundaries. Alt+B/F: words. Ctrl+W: cut word.
 Ctrl+K/U: cut line tail/head. Ctrl+Y: restore cut. Ctrl+_: undo edit.
 Up/Down: multiline movement, then history at its boundary. Ctrl+R: search history.
-? on empty input: shortcuts. Ctrl+O: step details. Ctrl+L: redraw.
+? on empty input: shortcuts. Ctrl+O: full block details. Ctrl+L: redraw.
 Ctrl+C with text clears it (Ctrl+_ restores). Empty idle Ctrl+C twice exits.
 Esc twice or empty Ctrl+C twice requests cancellation of the same cloud Run.
 Ctrl+D on empty input saves and detaches; the cloud Run continues. /quit also exits.`;
@@ -27,6 +30,7 @@ add("offline", "Draft without any network activity", s => {
   if (s.busy && !s.loginController) throw new CliError("session_busy", "Wait for this action to finish before disconnecting; your draft is kept");
   s.workOffline();
 });
+add("exec", "Allow local bash commands, or revoke immediately", (s, argument) => s.execConsent(argument), { argument: "on|off", requires: "login" });
 add("resume", "Reconnect or reconcile an interrupted ask", s => s.resume());
 add("quit", "Save draft and detach; cloud Run continues", s => s.close(), { aliases: ["exit"] });
 add("drafts", "Recover a saved draft", s => s.recoverDraft());
@@ -70,12 +74,12 @@ add("project", "Choose a Project or start a new study draft", async (s, argument
   ]);
   if (action !== "new") return s.link({ persist: action === "link" });
   if (s.run?.open || s.registry.state().pendingRun || s.registry.state().pendingCreate) throw new CliError("run_busy", "Resolve or finish the current Run before starting a new study");
-  s.registry.unlink(); s.binding = null; s.project = null; s.run = null; s.attachments = []; s.status = "New Project on first send"; s.change();
+  await withAdmissionLock(() => s.registry.unlink(), s.env); s.binding = null; s.project = null; s.run = null; s.attachments = []; s.status = "New Project on first send"; s.change();
 }, { argument: "[list]", requires: "login" });
 add("link", "Link an existing Project to this folder", s => s.link(), { requires: "login" });
-add("unlink", "Remove this folder's Project binding", s => {
+add("unlink", "Remove this folder's Project binding", async s => {
   if (s.run?.open || s.busy || s.registry.state().pendingRun || s.registry.state().pendingCreate) throw new CliError("run_busy", "Resolve or finish the current Run before unlinking");
-  s.followController?.abort(); s.generation++; s.registry.unlink(); s.binding = null; s.project = null; s.run = null; s.status = "Folder unlinked"; s.change();
+  s.followController?.abort(); s.generation++; await withAdmissionLock(() => s.registry.unlink(), s.env); s.binding = null; s.project = null; s.run = null; s.status = "Folder unlinked"; s.change();
 }, { requires: "login" });
 add("history", "Read earlier Runs in this Project", s => s.history(), { requires: "login" });
 add("name", "Name the Project", (s, value) => s.transition(async () => {
@@ -90,25 +94,62 @@ add("clear-files", "Remove pending attachments", s => {
   if (s.busy || s.registry?.state().pendingRun) throw new CliError("session_busy", "Resolve the pending action before clearing files");
   s.attachments = []; s.change();
 });
-add("files", "Selected inputs and downloadable results", s => s.message([
-  ...s.attachments.map(item => `Pending: ${item.path} (${item.bytes.length} bytes; not uploaded)`),
-  ...runView(s.run).artifacts.map((item, i) => `${i + 1}. ${item.filename} · ${item.kind} · /download ${i + 1} · /web`),
-].join("\n") || "No selected files or artifacts."));
+add("files", "Selected inputs, local authority and downloadable results", (s, argument) => {
+  if (argument === 'revoke') return s.revokeFiles();
+  const match = /^save (\d+)$/.exec(argument);
+  if (match) return s.transition(() => s.offerSaves(Number(match[1])));
+  const diff = /^diff (\d+)$/.exec(argument);
+  if (diff) return s.transition(() => s.fileDiff(Number(diff[1])));
+  if (argument) throw new CliError('usage_invalid', 'Use /files, /files revoke, /files save N or /files diff N');
+  return s.listFiles();
+}, {argument:'[revoke|save N|diff N]'});
 add("download", "Save and verify a result file", (s, argument) => {
   const match = /^(\d+)(?:\s+(.+))?$/.exec(argument);
   if (!match) throw new CliError("usage_invalid", "Use /download <artifact number> [output path]");
   return s.download(Number(match[1]), match[2]);
 }, { argument: "<number> [path]", required: true, requires: "login" });
+add("package", "Save a result file into its own folder to test locally; then /attach the report", (s, argument) => {
+  if (!/^\d+$/.test(argument.trim())) throw new CliError("usage_invalid", "Use /package <artifact number>");
+  return s.package(Number(argument));
+}, { argument: "<number>", required: true, requires: "login" });
+add("run-package", "Run a /package folder's declared tests here, with your consent; stage the report for upload", (s, folder) =>
+  s.runPackage(folder), { argument: "[folder]", requires: "login" });
+add("stop-package", "Stop the running package and every process it started", s => s.stopPackage());
+add("produce", "Ask one specialist (business, knowledge) to produce; a knowledge document needs a completed analysis in this Project first; Engineering adopts its result", (s, argument) =>
+  s.produce(argument), { argument: "<specialist> [entry] [profile=<nasa|esa>] <ask>", required: true, requires: "login" });
 add("export", "Export the answer, Run record and verified files to a new folder", (s, path) => s.exportRun(path || undefined), { argument: "[folder]", requires: "login" });
 add("copy", "Copy the exact answer or save it to a new file", (s, path) => s.copy(path || undefined), { argument: "[path]" });
 add("answer", "Answer the current clarification", s => s.answer(), { requires: "question" });
 add("steer", "Send an instruction to the running Run", (s, text) => s.steer(text), { argument: "<instruction>", required: true, requires: "run" });
 add("answer-now", "Ask the running Run to conclude", s => s.steer(""), { requires: "run" });
 add("cancel", "Request cancellation; keep completed work", s => s.cancel(), { requires: "run" });
-add("details", "Read the current or numbered step", (s, argument) => {
-  const steps = runView(s.run).steps;
-  const event = argument ? steps[Number(argument) - 1] : steps.at(-1);
-  s.message(event ? JSON.stringify(event.payload, null, 2) : "No step details yet.");
+add("details", "Read the current or numbered block in full", async (s, argument) => {
+  const blocks = runBlocks(s.run);
+  const block = argument ? blocks[Number(argument) - 1] : [...blocks].reverse().find(b => b.calls) ?? blocks.at(-1);
+  if (!block) { s.message("No block details yet."); return; }
+  const lines = [blockText(block, { full: true })];
+  for (const { call, result } of block.calls ?? []) {
+    if (!result?.stdout_ref) continue;
+    const ref = result.stdout_ref, chunks = [];
+    let size = 0;
+    try {
+      s.requireLogin();
+      if (!s.project?.id) throw new CliError("project_required", "Select the Run's Project first");
+      const metadata = await s.client.artifactGet(ref, s.project.id, chunk => {
+        size += chunk.byteLength;
+        if (size > 64 * 1024) throw new CliError("stdout_too_large", "Full stdout exceeds the 64 KiB CLI detail limit");
+        chunks.push(Buffer.from(chunk));
+      }, s.lifecycle.signal);
+      if (!metadata.content_type.startsWith("text/") && !["application/json", "image/svg+xml"].includes(metadata.content_type)) {
+        throw new CliError("stdout_invalid", "Full stdout is not a textual media type");
+      }
+      lines.push(`Full stdout · ${call.call_id} · ${ref}:\n${Buffer.concat(chunks).toString("utf8") || "(empty)"}`);
+    } catch (error) {
+      lines.push(`Full stdout unavailable · ${ref}: ${error.message}`);
+      if (error.code === "stdout_too_large") lines.push(`Save full stdout: vecteur artifact get ${ref} -p ${s.project.id} --output <file>`);
+    }
+  }
+  s.message(terminalText(lines.join("\n")));
 }, { argument: "[number]" });
 add("handoff", "Open your Claude Code or Codex here with Vecteur attached", (s, vendor) => {
   if (!["claude", "codex"].includes(vendor)) throw new CliError("usage_invalid", "Use /handoff claude or /handoff codex");
