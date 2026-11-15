@@ -2,7 +2,7 @@
   "files": {
     ".github/workflows/release.yml": {
       "mode": 420,
-      "sha256": "dc5307429dab17da7ead8c854cd1229bdc8a3aa21469ff1186f8bac9f6f0a6d3"
+      "sha256": "38f2c3f2aaf52b2a39729b827c13bc9fe17acec8d432491907f85ebb726ff742"
     },
     ".release/verify.py": {
       "mode": 420,
@@ -10,19 +10,19 @@
     },
     "README.md": {
       "mode": 420,
-      "sha256": "f4bce193a758b6bc2f31f7415b4a27f21b8c26b76c7a61425e9f09c893406a08"
+      "sha256": "12460c743082c8df11864d6c1ddb096a37e5bd3a572dbc2e14813261abdcbecb"
     },
     "bin/vecteur.js": {
       "mode": 493,
-      "sha256": "90402e144c5ca3ad896657e4015ca90631309aebbb6d532ea030b0cb6085fde9"
+      "sha256": "3d437bf1882c61c30f4b4f16b32ecd4b0dd7d740e2bc7a3a1905fd7211eb1b00"
     },
     "package.json": {
       "mode": 420,
-      "sha256": "89edd3a024c4df16878ce45774d8d24e64e83c735706334332c41663bf995af4"
+      "sha256": "8a493535d524ed91683f6b22371b33e34bbb3a8b48a718e059b00c35787d9c32"
     },
     "src/blocks.js": {
       "mode": 420,
-      "sha256": "91d1bb9d5ee1cb2c3040edf725afd2a56141474d59e1d43dfec27a2c8df0b9e3"
+      "sha256": "d322659b049cf6fcf741c26e0b915c3314fa59fff038038723eebfffe6b5512a"
     },
     "src/browser.js": {
       "mode": 420,
@@ -30,15 +30,15 @@
     },
     "src/client.js": {
       "mode": 420,
-      "sha256": "cf3548c3c5068eabdf8af137194e04cbbbd93bf922573248c06e6d2aa693538c"
+      "sha256": "cfbbeb74832228b348ae2dd7650a168020dedfa3d091da54d9575f3c5d3d775c"
     },
     "src/commands.js": {
       "mode": 420,
-      "sha256": "374aa0fc4543f90369ee04eb97f2eca4afd1a97c51cd46e2482a6a205f4c0065"
+      "sha256": "eaf73a69a96db16b71f7e1d74955d7404680811a131ea9ab4a68ab89ec8a5c3a"
     },
     "src/contract.js": {
       "mode": 420,
-      "sha256": "239da4958c5d5df5445b7c726fd6d03752ec5040a05e0224dfaf7ad5559eff2f"
+      "sha256": "13c0eeaf040540fbe6b8434eab4757a323c1565970ed2d7fc2df4b0a5df13304"
     },
     "src/credentials.js": {
       "mode": 420,
@@ -50,7 +50,7 @@
     },
     "src/download.js": {
       "mode": 420,
-      "sha256": "18d4a772976675fafd359e4ec538f91fd74a20aaf4d04b53e1e3cbb15c7cade0"
+      "sha256": "9f1c8e3d133222a78a9dbe678b66fa6b49d67090530bb7b9aeac72120e3a87cb"
     },
     "src/errors.js": {
       "mode": 420,
@@ -58,11 +58,7 @@
     },
     "src/exchange.js": {
       "mode": 420,
-      "sha256": "5f8040120442cdb3915857f33204ad530f90b90d3417bffb0efbef267e684861"
-    },
-    "src/executor.js": {
-      "mode": 420,
-      "sha256": "52c2f204cfbc6a8ed503c7854824628033b1094c9aed17dac74ec0d958bdb639"
+      "sha256": "390089ddcfd9a4828e4001f4ebe57c3b2b646e59722ee9cbe35762258ea3c93c"
     },
     "src/folders.js": {
       "mode": 420,
@@ -70,7 +66,7 @@
     },
     "src/format.js": {
       "mode": 420,
-      "sha256": "2f7edabf8be5b09e70fe0613a591ffa72e043d162fced402ed97c70b7ac54e0f"
+      "sha256": "88e51f217cc04c47e451a9d5610f89afd9a112d6322bed7a9cf0a362dcbe7c96"
     },
     "src/input.js": {
       "mode": 420,
@@ -78,23 +74,19 @@
     },
     "src/localfiles.js": {
       "mode": 420,
-      "sha256": "806ea3d99d61218097db29550f3879ad2b21c3ad4bad3e7265270f0fa39da478"
+      "sha256": "ba890cb6b598c546e66afbb2acabe0badead44efa8ae253e7bc8cbfb703e582c"
     },
     "src/markdown.js": {
       "mode": 420,
-      "sha256": "39707d885e0b63196cabf83b90e323f03c5c06144741a4c4961f50cbdf8419e5"
+      "sha256": "f686301c2879201f4334278beb41e7fea230000bddc182c1a1e9e9b65d9b5724"
     },
     "src/mcp.js": {
       "mode": 420,
-      "sha256": "5f034f3b252af74fa055146174e76b0ae61c4e424cec50c96ba73200d71ff504"
+      "sha256": "d7351d74c55a21d136301825750bab1606beecdd52b9c51e228baa14b6677914"
     },
     "src/preferences.js": {
       "mode": 420,
       "sha256": "ad52852601748ffcd34639ca0cf06781d3f468a11f5d578ab146b392bfabdd6d"
-    },
-    "src/produce.js": {
-      "mode": 420,
-      "sha256": "fcd1cc8dcd2d63f56ccf7c1d42f68a9b400fe5055c088e28b1b9ecb524cd48fe"
     },
     "src/projects.js": {
       "mode": 420,
@@ -102,7 +94,11 @@
     },
     "src/session.js": {
       "mode": 420,
-      "sha256": "bf4f583a95a2fc28bf172f9c18b20f45bd355caa8159c5c9a4d245baf6ea6854"
+      "sha256": "29878e087d8d1e99d8d8e47ef4c895da9cd03201ec17f9ec65f2edae3bebac9a"
+    },
+    "src/stop-words.js": {
+      "mode": 420,
+      "sha256": "a6fbd7390ceda7c9c852687a99abb9e451ed8114494ea389997546ed5bfeb0b6"
     },
     "src/store.js": {
       "mode": 420,
@@ -110,11 +106,11 @@
     },
     "src/terminal.js": {
       "mode": 420,
-      "sha256": "80e1b13a80cf4b19195027ea1187ef2e48c4ef32c905da4cf0daf459a66a1f3e"
+      "sha256": "b11ed34cafcc5614822cdb477bc4af306b575ca71fbccbefc0d2a7f973cb332c"
     },
     "src/tui/view.js": {
       "mode": 420,
-      "sha256": "56769fb586cd3555da37541ca55372b3ff27f65ebd4d1a42abbeecd10ef046b4"
+      "sha256": "1be6f4960b6faab791e1943f4611c127cd21fdb1e27d1f967a53b3bf435adcfb"
     },
     "src/update.js": {
       "mode": 420,
@@ -123,17 +119,21 @@
     "src/vendors.js": {
       "mode": 420,
       "sha256": "99278e6dd935f3380c132092c716c3598d35a40ec13f092d99196eb166ba32a5"
+    },
+    "src/wire.js": {
+      "mode": 420,
+      "sha256": "958d20f77074fa8e1c5d182f6428e9f2d81e3438645958053540e72b9f6ed446"
     }
   },
   "release": {
     "cli": {
-      "contract_identity": "api-sha256:c95d404a75b061156aeda270031aceedd19c61986c33deb1fabbd28e0fbf5696;run-wire-sha256:7c2d13df2194f3c86af423596cae09185d771bd6c0cdf2852ec63b79f94cafe9",
-      "integrity": "sha512-kR0aUWLmXsnR/6+K7iy/RmXGp9nTiB5QZVaXzgj2Liq3vuiATjDrvHhjvjrkLwzIVY+v2lhlUv8utzOf8ss2Sg==",
+      "contract_identity": "api-sha256:1973f8517a4c3f6cbbfd2cfc9dffb477a75a8bf3cd2291577a4f07e0b6edd614;run-wire-sha256:678602fd4f1dba0493ad0f860be24bbf88532945edfe9dbe1555e5145bbbeefb",
+      "integrity": "sha512-5sZ1wCPHmrF5uPqBy3yrkbXG87DQ77hYjRVDzdSWoMOXPW4gXF4M+OXaBQO8h3GIDNu7f8x9FnKeR5t63c+vHA==",
       "package": "@vecteur/cli",
-      "version": "0.11.1"
+      "version": "0.12.4"
     },
     "schema": "release-cli.v1",
-    "tag": "v5.1.0"
+    "tag": "v6.0.0"
   },
   "tracked": [
     ".github/workflows/release.yml",
@@ -152,7 +152,6 @@
     "src/download.js",
     "src/errors.js",
     "src/exchange.js",
-    "src/executor.js",
     "src/folders.js",
     "src/format.js",
     "src/input.js",
@@ -160,13 +159,14 @@
     "src/markdown.js",
     "src/mcp.js",
     "src/preferences.js",
-    "src/produce.js",
     "src/projects.js",
     "src/session.js",
+    "src/stop-words.js",
     "src/store.js",
     "src/terminal.js",
     "src/tui/view.js",
     "src/update.js",
-    "src/vendors.js"
+    "src/vendors.js",
+    "src/wire.js"
   ]
 }

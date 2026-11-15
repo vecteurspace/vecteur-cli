@@ -45,8 +45,6 @@ export function qualify({ platform = process.platform, version = process.version
   const [major, minor] = version.split('.').map(Number);
   if (platform !== 'linux' || major < 20 || (major === 20 && minor < 8)) fail('platform_unqualified', 'Local file authority requires Linux and Node >=20.8');
 }
-export const localProcessEnv = (env, root) => ({ PATH: env.PATH ?? '/usr/bin:/bin', HOME: env.HOME ?? root,
-  TMPDIR: env.TMPDIR, XDG_CONFIG_HOME: env.XDG_CONFIG_HOME, LANG: 'C.UTF-8', PYTHONDONTWRITEBYTECODE: '1' });
 function directory(env) { return dirname(credentialsPath(env)); }
 function store(env, name) { return join(directory(env), name + '.json'); }
 function readGrants(env) {
@@ -137,8 +135,7 @@ export function endGrants({ origin, accountId, root } = {}, env = process.env) {
   const value = readGrants(env);
   const intent = journal(env); intent.grantEnds ??= {};
   const affected = [];
-  // An invocation may hold only an in-memory execution marker. An explicit folder
-  // revoke must still advance its generation, even before any file grant exists.
+  // An explicit folder revoke advances its generation even before any file grant exists.
   const explicit = origin && accountId && root ? {
     [grantKey({ origin, accountId, root: { path: root } })]: { origin, accountId, root: { path: root }, generation: 0 },
   } : {};
@@ -185,26 +182,9 @@ export function rootIdentity(path) {
   if (!info.isDirectory()) fail('folder_invalid');
   return { path: real, ...inode(info) };
 }
-export function executionGrant(pin, env = process.env) {
+export function pinCheck(grant, pin, env = process.env) {
   requireLock(env);
-  const grant = currentGrant(pin, env) ?? { ...pin, generation: readGrants(env).generations[grantKey(pin)] ?? 0 };
-  return { ...grant, execCredential: pin.credential.token, execPid: process.pid };
-}
-export function checkGrantLive(grant, pin, env = process.env) {
-  requireLock(env);
-  if (grant.accountId !== pin.accountId || grant.origin !== pin.origin || grant.root.path !== pin.root.path || grant.execCredential !== pin.credential.token
-    || (readGrants(env).generations[grantKey(grant)] ?? 0) !== grant.generation) fail('grant_changed', 'Local permission changed; draft kept. Confirm again.');
-}
-export function consumeExec(runId, requestId, env = process.env) {
-  requireLock(env);
-  const value = journal(env); value.executions ??= [];
-  if (value.executions.some(row => row.runId === runId && row.requestId === requestId)) fail('executor_consumed');
-  value.executions.push({runId,requestId}); saveJournal(env,value);
-}
-export function pinCheck(grant, pin, env = process.env, { execution = false } = {}) {
-  requireLock(env);
-  if (execution && (grant.execCredential !== pin.credential.token || grant.execPid !== process.pid)) fail('grant_changed');
-  const live = currentGrant(grant, env) ?? (execution && (readGrants(env).generations[grantKey(grant)] ?? 0) === grant.generation ? grant : null);
+  const live = currentGrant(grant, env);
   if (!live || live.generation !== grant.generation || live.projectId !== pin.projectId
       || pin.accountId !== grant.accountId || pin.origin !== grant.origin) fail('grant_changed', 'Local permission changed; draft kept. Confirm again.');
   if (pin.role === 'VIEWER') fail('role_forbidden');
@@ -578,7 +558,6 @@ export async function writeProposalConfined(grant, rel, fetchBytes, expected, op
 }
 export function admissionIntent(origin, projectId, key, body, env = process.env) {
   requireLock(env); const j = journal(env);
-  if (body.local_exec !== undefined) fail('admission_unresolved', 'Execution consent cannot be frozen; observe the Project history');
   j.admissions ??= {};
   const id = hash(JSON.stringify([origin, projectId, key]));
   const prior = j.admissions[id];
@@ -595,9 +574,8 @@ export async function reconcileAdmissions(client, origin, env = process.env) {
   requireLock(env);
   for (const [id, row] of Object.entries(journal(env).admissions ?? {})) {
     if (row.origin !== origin) continue;
-    if (row.body?.local_exec !== undefined) fail('admission_unresolved', 'Saved execution consent expired; observe the Project history');
     try { await client.runAdmit(row.projectId, row.body, row.key); admissionResolved(id, env); }
-    catch (e) { if (e.admission === 'refused' || ['state_fork', 'state_busy'].includes(e.code)) admissionResolved(id, env); else throw e; }
+    catch (e) { if (e.admission === 'refused' || ['state_fork', 'state_busy', 'not_supported', 'project_read_only'].includes(e.code)) admissionResolved(id, env); else throw e; }
   }
 }
 

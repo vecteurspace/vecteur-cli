@@ -2,7 +2,7 @@
 
 One command line for Vecteur's public API. Sign in through your browser, then use the same
 Projects and run records as the web app. The client stores your credential locally; it never
-calls the OPE, engine or database directly.
+calls the runner, engine or database directly.
 
 ```bash
 npm install -g @vecteur/cli
@@ -13,15 +13,12 @@ vecteur
 linked to this folder. A new folder creates its Project only when you send your first ask.
 No `init` command or file in the working directory is required.
 
-On Linux, a fresh interactive ask offers separate local command consent. `/exec on` enables
-it for the next admission; `/exec off` revokes it and stops the active process group.
-Commands show their exact bash text, folder and timeout, with once/session approval.
-`vecteur run submit --ask '…' --allow-exec` grants invocation-scoped session approval and
-stays in the foreground; `--no-wait`, persisted `--request-key` retries and MCP refuse this flag.
-The shell has your OS permissions, including network access and writes outside its cwd.
-Only scanned UTF-8 output tails (16,000/8,000 bytes) return to Vecteur; credential-shaped or
-unsupported output withholds both tails. A lost start acknowledgement never spawns; unknown
-outcomes are never retried. Restarted sessions observe existing Runs without execution authority.
+One Run is one turn, executed in Vecteur cloud. A turn prints your ask, a working trace (one line
+per tool call, with its result status), the answer, the files it produced and its terminal state:
+`completed`, `failed`, `cancelled` or `budget`. A `budget` terminal adds the stop card: what the
+server offers this reader (plan, usage). A question from Vecteur is its answer; your reply is your
+next ask. A Project created before the current engine is read-only: an ask to it is refused
+`project_read_only`, and its history stays readable.
 
 For scripts and explicit one-shot commands:
 
@@ -68,17 +65,17 @@ again, which would start another turn. Start a fresh study with `vecteur project
 embedded events match the stream. Redirects, secret-shaped responses, malformed responses and
 timeouts fail nonzero. `--json` sorts object keys for deterministic machine output.
 
-Human run output shows the sealed synthesis, input origins, artifact download commands, the typed
-terminal cause/recovery, and—after `run submit`—the selected Project's UTC-month customer cost using
-the server's display strings. Machine run output remains the unchanged canonical record. Artifact
+Human run output shows the working trace, the answer, the files with their download commands, the
+typed terminal state and cause, and—after `run submit`—the selected Project's UTC-month customer cost
+using the server's display strings (at a `budget` terminal, the stop card instead). Machine run output remains the unchanged canonical record. Artifact
 downloads use the Project-scoped admitted CAS route, verify the declared length, media type and
 SHA-256, and refuse to overwrite a local path. Use `--project ID` when no Project is selected.
 
 `vecteur mcp` serves MCP over stdio using the same credentials and public client. It exposes
 `vecteur_project_get`, `vecteur_run_submit`, `vecteur_run_get`, `vecteur_run_events`, `vecteur_artifact_get` (digest-verified download into the working folder, never overwrites) and `vecteur_material_attach` (uploads one file from the working folder after you confirm the origin and the Project head; refuses read-only, foreign or moved-on Projects).
 Pass material_attach's returned `selections` verbatim to `vecteur_run_submit` or `vecteur_run_start` for that Project. For multiple files, concatenate their `selections` arrays. These select the same extracts as CLI `--attach`; upload alone does not admit material to a Run. Omitting that Project's pending material in the same MCP session refuses with `selection_required` before admission; pending material in another Project does not block it. To deliberately abandon pending material, pass the optional boolean `discard_pending_material: true` to submit or start: it clears only that Project's pending tracking before admission and uses the supplied selections, or none if omitted. The discard remains effective if admission refuses; it does not delete uploaded files. Omitting the flag or passing `false` retains the guard. A file with no selectable extracts refuses with `extraction_unavailable`.
-It also exposes `vecteur_run_start`, `vecteur_run_status` and `vecteur_clarification_answer` for
-long Runs. `vecteur_run_submit` blocks and is suitable only for short asks.
+It also exposes `vecteur_run_start` and `vecteur_run_status` for long Runs. `vecteur_artifact_get`
+takes a `cas_ref`, or a `run_id` with the file's `artifact_path`. `vecteur_run_submit` blocks and is suitable only for short asks.
 An MCP host supplies tool arguments; stdout carries only MCP protocol.
 
 `vecteur mcp setup claude` (or `codex`) runs that vendor's own `mcp add` once so your Claude Code
@@ -92,7 +89,7 @@ mode in which the vendor session appears inside Vecteur's TUI and web.
 new folder: `answer.md` (exact answer bytes), `run.json` (the canonical record) and every artifact,
 each verified against its SHA-256 CAS id. Nothing is overwritten.
 
-## Claude Code and Codex: attach, poll, answer, export
+## Claude Code and Codex: attach, poll, export
 
 Both vendors use the same lifecycle recipe. Sign in to Vecteur and to your vendor separately;
 use `vecteur mcp setup claude` / `vecteur handoff claude`, or substitute `codex`. The installed
@@ -113,26 +110,15 @@ vecteur run submit --no-wait --parent "$H" --request-key orbit-20261107-01 \
 vecteur run get RUN_ID --json
 # Optional validated event replay (the stream has the configured request timeout):
 vecteur run events RUN_ID --json
-# When the latest clarification has state "requested":
-vecteur run answer RUN_ID --clarification CLARIFICATION_ID --answers answers.json --json
-vecteur run get RUN_ID --json
+# A question from Vecteur is the Run's answer: reply with a new submit on the new head.
 vecteur run export RUN_ID -p PROJECT_ID --output orbit-result --json
 ```
 
-`answers.json` is the wire answer array; `--answers -` reads the same JSON from stdin:
-
-```json
-[{"id":"orbit","selected":["leo","meo"],"custom":"Include a polar case"},
- {"id":"mass","selected":[],"custom":"550 kg"}]
-```
-
-The server owns valid question/option ids, multi-select, expiry and stale/duplicate refusals.
 MCP hosts use `vecteur_run_start({project_id, ask, request_key, parent_state_hash})`, then poll
-`vecteur_run_status({run_id})` and answer with
-`vecteur_clarification_answer({run_id, clarification_id, answers})`. Start returns the RunAck
-plus the resolved `parent_state_hash`. Status returns `{run_id, terminal, last_seq, clarification}`:
-one bounded record read, last sequence `-1` when no events exist, and the latest clarification
-payload verbatim only while requested. Stopping polling detaches and never cancels the Run.
+`vecteur_run_status({run_id})`. Start returns the RunAck plus the resolved `parent_state_hash`.
+Status returns `{run_id, terminal, last_seq}`: one bounded record read, `terminal` empty while the
+Run is open, last sequence `-1` when no events exist. Stopping polling detaches and never cancels
+the Run.
 
 `--attach` is explicit consent to upload exactly those files to the command's explicit or
 selected Project at the authenticated origin, for Vecteur cloud and the Run's model provider.
@@ -156,7 +142,7 @@ without that file remains `admission_unresolved`; a conflicting same-key retry a
 `admission_unresolved`. Inspect Project history before choosing a new key. No newest Run is
 presented as recovered, and the client never generates a replacement key. Transport, timeout,
 pending, unknown and malformed-ack errors carry the request key and parent once resolved.
-Only `run submit --no-wait` and `run answer` emit one JSON error object on stderr
+Only `run submit --no-wait` emits one JSON error object on stderr
 (`code`, `message`, optional `run_id`, `request_key`, `parent_state_hash`); stdout holds only the
 success record. Existing blocking CLI and MCP success outputs and CLI error bytes are preserved;
 MCP errors may additionally name an admitted `run_id`.
@@ -178,8 +164,8 @@ Bare invocation in a pipe or CI keeps the previous status output; `vecteur statu
 - `/project` chooses a Project for this session; `/link` saves the folder association.
   `/unlink` removes that association for this subtree and preserves the draft. `/name` renames
   the current Project or names the one created on first send. `/history` loads older Runs on demand.
-- `/model` selects the next Run's model or route from the matched server catalogue. `/mode`
-  explains leadership, execution location and payer. Stage 1 runs in Vecteur cloud.
+- `/model` selects the next Run's model from the product's model choices (Auto is the default).
+  `/mode` explains model, execution location and payer. Runs execute in Vecteur cloud.
 - `@` completes local paths. A whole filename in your ask offers attachment after local
   checks (at most three offers; ambiguous basenames list choices).
   A refused name prints `name: not offered (reason)` and asks whether to send without it.
@@ -199,11 +185,9 @@ Bare invocation in a pipe or CI keeps the previous status output; `vecteur statu
   Up to eight files, **8 MiB each** (reduced from 16 MiB) and 32 MiB total; all available extracts
   are selected. `/clear-files` removes pending selections. A retry of an admitted upload uses
   its frozen source handle and never rereads the local file.
-- `/answer` handles clarification, including multiple choices and custom text. `/steer <text>`
-  and `/answer-now` submit instructions; acceptance is distinct from execution.
+- An ask sent while a Run is working is kept as your draft; send it when the Run ends.
 - `/cancel` or double Esc requests cloud Run cancellation. Ctrl+D on an empty composer or
   `/quit` detaches; the cloud Run continues. Ctrl+C clears a nonempty composer.
-- `/package <number>` saves a result into its own new folder and prints how to continue. Local execution needs its separate consent; attached test reports join the next turn as your evidence, not an accepted result.
 - After a terminal head Run, a save-new prompt offers absent artifact paths, including missing
   parent directories. Identical bytes preselect the shortest path; `d` shows every path and
   lets you choose any. `yes` installs verified bytes without overwriting, `n` declines.
@@ -253,7 +237,7 @@ request evidence stays until resolved. Account draft recovery requires the same 
 previously bound by a successful account read. Never-signed-in drafts occupy a separate unsigned
 namespace with no Project authority; only explicit login transfers them into an account. Neither
 recovery path grants server access. Selections hold metadata until send and must be selected
-again after restart; generated `/run-package` reports remain an explicit-command exception. A newer store version is refused without
+again after restart. A newer store version is refused without
 rewriting it. Previous CLI versions ignore the separate folder registry.
 
 ## Local file authority limits
@@ -329,7 +313,7 @@ limit; identity-checked cleanup has the same last-check race. Node provides no o
 boundary for eliminating it here. The TUI has no `--project` attachment door;
 `run submit --no-wait -p OTHER --attach ...` grants only that invocation's explicit destination.
 
-Explicit `/download`, `/copy`, `/export`, `artifact get`, `run export`, `/package`, `/run-package`
+Explicit `/download`, `/copy`, `/export`, `artifact get`, `run export`
 and MCP `materialAttach` retain their own consent/ownership boundaries. They are not uses of the
 new persistent local grant; MCP attachment remains the integration-doors owner.
 
@@ -341,7 +325,7 @@ One package, one session owner, two views; stage 1 has no daemon or second appli
 |---|---|
 | `bin/vecteur.js` | TTY dispatch and preserved script/MCP commands; lazy terminal loading |
 | `session.js`, `commands.js` | Cloud actions, prompts, recovery and view facts |
-| `client.js` | Public API, auth transport, validated records, sources, controls and cursor replay |
+| `client.js`, `wire.js` | Public API, auth transport, sources and cursor replay; wire v6 event and record validation |
 | `credentials.js`, `folders.js`, `store.js` | Existing login, account/folder metadata and atomic persistence |
 | `localfiles.js` | Grants, anchored reads/writes, exclusions/scan, local lock, admission/save journals and recovery |
 | `input.js`, `terminal.js` | Grapheme-aware composer, paste, signals and the single stdout writer |
@@ -355,10 +339,9 @@ Ink failed the frozen startup budget. Completed output is appended; resize aband
 geometry so it never guesses how many reflowed scrollback lines to erase. Neither view authorizes
 operations or issues requests itself.
 
-The v5 foreground `local_exec` replaces the proposed companion and local-file seed paths.
-Folder links and file grants do not authorize execution. Explicit attach and verified save-new
-remain the file transfer doors; command output is not a Lab certification. Native Claude/Codex
-handoffs retain their own identity and lifecycle.
+Nothing runs on this computer: a Run executes in Vecteur cloud, and folder links and file grants
+authorize no execution. Explicit attach and verified save-new are the file transfer doors. Native
+Claude/Codex handoffs retain their own identity and lifecycle.
 
 The intended platform matrix includes Linux, macOS and Windows Terminal, plus screen-reader
 qualification. Current evidence and unresolved cases belong in the stage-1 WBS/backlog; Linux

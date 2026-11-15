@@ -1,4 +1,5 @@
-import { humanRun, progress, plainLine, terminalText, taskLines, terminalBlockLines, engineeringCall, capabilityCall } from "./format.js";
+import { progress, plainLine, terminalText, terminalBlockLines } from "./format.js";
+import { EVENT_KINDS } from "./contract.js";
 
 function elapsed(run, now) {
   if (!run) return null;
@@ -14,43 +15,25 @@ function elapsed(run, now) {
     + `${pad(Math.floor(seconds / 60) % 60)}:${pad(seconds % 60)}`;
 }
 
-/** RunWire owns the facts. Optional session cache projects only newly appended events. */
-export function runView(run, cache, now = Date.now()) {
+/** The wire owns the facts; this is the turn as a reader sees it. */
+export function runView(run, now = Date.now()) {
   const events = run?.events ?? [];
-  const same = cache && cache.run === run && cache.runId === run?.run_id && cache.events === events && cache.count <= events.length && cache.view;
-  if (same && cache.count === events.length && cache.terminal === run?.terminal) {
-    return { ...cache.view, blocks: [...cache.view.eventBlocks, ...controlBlocks(run, cache.view.eventBlocks.length)], elapsed: elapsed(run, now) };
-  }
-  const view = same ? cache.view : {
+  let progressLine = "Waiting for Vecteur";
+  for (const event of events) { const line = progress(event); if (line) progressLine = line.trim(); }
+  return {
     subject: run ? { kind: "vecteur_run", id: run.run_id } : null,
-    answer: "", question: null, artifacts: [], steps: [], progress: "Waiting for Vecteur",
-    terminal: "", transcript: "",
+    answer: events.findLast(event => event.kind === "synthesis")?.payload.markdown ?? "",
+    artifacts: runArtifacts(events), progress: progressLine, terminal: run?.terminal ?? "",
+    blocks: runBlocks(run), elapsed: elapsed(run, now),
   };
-  for (let index = same ? cache.count : 0; index < events.length; index++) {
-    const event = events[index];
-    if (event.kind === "synthesis") view.answer = event.payload.answer ?? "";
-    if (event.kind === "clarification") view.question = event.payload.state === "requested" ? event.payload : null;
-    if (["step_started", "step_finished", "task"].includes(event.kind)) view.steps.push(event);
-    const line = progress(event);
-    if (line) view.progress = line.trim();
-  }
-  view.terminal = run?.terminal ?? "";
-  view.artifacts = runArtifacts(events);
-  view.eventBlocks = eventBlocks(run);
-  view.transcript = run?.terminal ? humanRun(run) : "";
-  if (cache) Object.assign(cache, { run, runId: run?.run_id, events, count: events.length, terminal: run?.terminal, view });
-  return { ...view, blocks: [...view.eventBlocks, ...controlBlocks(run, view.eventBlocks.length)], elapsed: elapsed(run, now) };
 }
 
-
-/** Current revision per logical path; content identity never removes a destination. */
+/** Current revision per path. */
 export function runArtifacts(events = []) {
   const rows = new Map();
   for (const event of events) if (event.kind === "artifact") {
-    const artifact = event.payload;
-    const key = artifact.path ? `path:${artifact.path}` : `id:${artifact.id}`;
-    const prior = rows.get(key);
-    if (!prior || (artifact.revision ?? 0) >= (prior.revision ?? 0)) rows.set(key, artifact);
+    const prior = rows.get(event.payload.path);
+    if (!prior || event.payload.revision >= prior.revision) rows.set(event.payload.path, event.payload);
   }
   return [...rows.values()];
 }
@@ -64,172 +47,62 @@ export function artifactRows(artifacts) {
   });
 }
 
-const tuple = (run, step, call) => JSON.stringify([run, step ?? null, call ?? null]);
-const sourceRead = call => call.tool === "sources" && /^(context_list$|extraction:)/.test(call.summary ?? "");
-
-/** Pure, replay-safe projection. Only the complete event prefix may leave the live region.
- * Controls have no event anchor: they follow in a separate section and stay live until terminal.
- * Payloads are never decorated/mutated, so machine JSON remains the owner's exact record.
- */
+/** Pure, replay-safe projection: one block per tool call (with its result once it arrived), one for the terminal,
+ * and one for any event kind this build does not know. A block is committed once nothing before it is still running. */
 export function runBlocks(run) {
-  const blocks = eventBlocks(run);
-  return [...blocks, ...controlBlocks(run, blocks.length)];
-}
-
-function eventBlocks(run) {
   if (!run) return [];
   const events = [...(run.events ?? [])].sort((a, b) => a.seq - b.seq);
-  const terminal = events.find(event => event.kind === "terminal");
-  const calls = new Map(), byCall = new Map(), questions = new Map(), seen = new Set(), blocks = [];
-  let fold = null;
-  const closeFold = () => { if (fold) fold.closed = true; fold = null; };
+  const closed = events.some(event => event.kind === "terminal");
+  const byCall = new Map(), blocks = [];
   for (const event of events) {
     const payload = event.payload;
     if (event.kind === "tool_call") {
-      const key = tuple(run.run_id, payload.step_id, payload.call_id);
-      if (calls.has(key)) continue; // a reconnect may replay a prefix
-      const call = { key, seq: event.seq, call: payload, result: null };
-      calls.set(key, call); byCall.set(payload.call_id, call);
-      if (sourceRead(payload)) {
-        if (!fold || fold.stepId !== payload.step_id) {
-          closeFold();
-          fold = { kind: "sources", key, seq: event.seq, stepId: payload.step_id, calls: [], closed: false };
-          blocks.push(fold);
-        }
-        fold.calls.push(call);
-      } else {
-        closeFold();
-        blocks.push({ kind: "tool", key, seq: event.seq, stepId: payload.step_id, calls: [call] });
-      }
+      if (byCall.has(payload.call_id)) continue; // a reconnect may replay a prefix
+      const block = { kind: "tool", key: `${run.run_id}:${payload.call_id}`, seq: event.seq, call: payload, result: null };
+      byCall.set(payload.call_id, block); blocks.push(block);
     } else if (event.kind === "tool_result") {
-      const call = byCall.get(payload.call_id);
-      if (call && !call.result) call.result = payload;
-    } else if (event.kind === "step_finished" || event.kind === "clarification") {
-      closeFold();
-      // Each clarification transition is immutable, with the original questions available on resolution.
-      if (event.kind === "clarification" && payload.state === "requested") questions.set(payload.id, payload);
-      const question = event.kind === "clarification" ? questions.get(payload.id) : null;
-      const key = tuple(run.run_id, payload.step_id ?? payload.id, `${event.kind}:${event.seq}`);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      blocks.push({ kind: event.kind === "clarification" ? "clarification" : "step",
-        key, seq: event.seq, stepId: payload.step_id, payload, ...(question ? { question } : {}) });
+      const block = byCall.get(payload.call_id);
+      if (block && !block.result) block.result = payload;
     } else if (event.kind === "terminal") {
-      closeFold();
-      blocks.push({ kind: "terminal", key: tuple(run.run_id, null, "terminal"), seq: event.seq,
-        state: payload.state ?? payload.terminal, lines: terminalBlockLines({ ...run, terminal: payload.state ?? payload.terminal }) });
+      blocks.push({ kind: "terminal", key: `${run.run_id}:terminal`, seq: event.seq, state: payload.state,
+        lines: terminalBlockLines({ ...run, terminal: payload.state }) });
+    } else if (!EVENT_KINDS.includes(event.kind)) {
+      blocks.push({ kind: "unknown", key: `${run.run_id}:unknown:${event.seq}`, seq: event.seq, eventKind: String(event.kind) });
     }
   }
   let waiting = false, number = 0;
   for (const block of blocks) {
-    const complete = !block.calls || block.calls.every(call => call.result || terminal)
-      && (block.kind !== "sources" || block.closed || terminal);
-    waiting ||= !complete;
+    waiting ||= block.kind === "tool" && !block.result && !closed;
     block.committed = !waiting;
     block.number = ++number;
   }
   return blocks;
 }
 
-function controlBlocks(run, number) {
-  return [...(run?.controls ?? [])].sort((a, b) => a.sequence - b.sequence).map(control => ({
-    kind: "control", key: tuple(run.run_id, null, `control:${control.id}`),
-    sequence: control.sequence, payload: control, committed: !!run.terminal, number: ++number,
-  }));
-}
+const TOOL_LABEL = tool => String(tool).charAt(0).toUpperCase() + String(tool).slice(1);
 
-const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
-function sourceSummary(calls) {
-  const extracts = new Set(), files = new Set();
-  for (const { call, result } of calls) {
-    if (result?.status !== "ok" || result.files_changed?.length) return null;
-    let data;
-    try { data = JSON.parse(result.stdout_excerpt); } catch { return null; }
-    if (!data || typeof data !== "object" || Array.isArray(data)
-        || data.extracts !== undefined && !Array.isArray(data.extracts)) return null;
-    // Count extracts actually read, rather than those merely offered/selected by context_list.
-    for (const extract of data.extracts ?? []) {
-      const handle = extract?.source_handle;
-      if (typeof extract?.id !== "string" || typeof handle?.cas_ref !== "string"
-          || typeof handle?.acquisition_ref !== "string") return null;
-      extracts.add(extract.id);
-      files.add(JSON.stringify([handle.cas_ref, handle.acquisition_ref]));
-    }
-    if (call.summary !== "context_list" && !Array.isArray(data.extracts)) return null;
-  }
-  return extracts.size && files.size ? `Read ${plural(extracts.size, "extract")} from ${plural(files.size, "file")}` : null;
-}
-
+/** `{tool, title, status, rows}`; `full` adds the call's input and the result excerpt. */
 export function blockContent(block, { full = false } = {}) {
   if (block.kind === "terminal") return { title: `Terminal: ${block.state}`, rows: block.lines, status: block.state };
-  if (block.kind === "step") {
-    const row = block.payload;
-    const rows = taskLines([{ kind: "step_finished", payload: row }]);
-    // The existing engineering wording may paraphrase a cause; keep the typed facts too.
-    if (row.cause) rows.push(`${plainLine(row.status)} · Cause: ${plainLine(row.cause)}`);
-    return { title: "Step", status: row.status, rows };
+  if (block.kind === "unknown") return { title: `Unknown event kind: ${block.eventKind}`, rows: ["This CLI cannot read it; next: vecteur update"], status: "unknown" };
+  const { call, result } = block;
+  const status = result ? (result.ok ? "ok" : "failed") : block.committed ? "no result recorded" : "running";
+  const rows = [];
+  if (full) {
+    rows.push(`Call: ${call.call_id}`, `Input: ${JSON.stringify(call.input)}`);
+    if (result) rows.push(`${status} · ${result.bytes} B`, `Output excerpt:\n${result.excerpt || "(empty)"}`);
+  } else if (result && !result.ok) {
+    // A failed call's last line is usually its cause.
+    const cause = result.excerpt.split("\n").filter(line => line.trim()).at(-1);
+    if (cause) rows.push(cause);
   }
-  if (block.kind === "control") {
-    const c = block.payload;
-    return { title: c.kind === "answer_now" ? "Answer now" : "Steer", status: c.state,
-      rows: [c.state, ...(c.text ? [c.text] : [])] };
-  }
-  if (block.kind === "clarification") {
-    const q = block.payload, source = block.question ?? q;
-    const rows = [q.state];
-    for (const question of source.questions ?? []) {
-      rows.push(question.question);
-      for (const choice of question.options ?? []) rows.push(`${choice.id ?? choice.value ?? ""} ${choice.label ?? choice}`);
-    }
-    if (q.answers) rows.push(`Answers: ${JSON.stringify(q.answers)}`);
-    return { title: "Clarification", status: q.state, rows };
-  }
-  const { call } = block.calls[0];
-  const engineering = !!engineeringCall(call, block.calls[0].result);
-  const capability = capabilityCall(call);
-  const tool = call.tool === "local_exec" ? "Bash" : engineering ? "Run" : call.tool === "python" ? "Python" : call.tool === "sources" ? "Sources"
-    : capability ? `${capability.label} ${capability.name}` : call.tool;
-  const status = block.calls.some(item => !item.result) ? block.committed ? "no result recorded" : "running"
-    : block.calls.find(item => item.result.status !== "ok")?.result.status ?? "ok";
-  const rows = [], preview = [];
-  const previewTail = status !== "ok";
-  const folded = block.kind === "sources" ? sourceSummary(block.calls) : null;
-  if (folded && !full) return { tool, title: call.tool === "local_exec" ? `${call.summary} · this computer` : call.title ?? "", status, rows: [`${folded} · ok`], preview: [] };
-  if (folded) rows.push(folded);
-  for (const item of block.calls) {
-    const c = item.call, r = item.result;
-    const state = r?.status ?? (block.committed ? "no result recorded" : "running");
-    const exit = r?.exit_code !== undefined && r.exit_code !== null ? ` · exit ${r.exit_code}` : "";
-    const seconds = r?.seconds !== undefined && r.seconds !== null ? ` · ${r.seconds}s` : "";
-    if (engineering && (r || !block.committed)) rows.push(...taskLines([
-      { kind: "tool_call", payload: c }, ...(r ? [{ kind: "tool_result", payload: r }] : []),
-      { kind: "step_finished", payload: { step_id: c.step_id, title: c.title, status: "computed" } },
-    ]));
-    rows.push(`${state}${exit}${seconds}`);
-    for (const file of r?.files_changed ?? []) rows.push(`wrote ${file.path} (${file.bytes} B)`);
-    if (r?.status === "denied" && r.stderr_excerpt) rows.push(r.stderr_excerpt);
-    if (full) {
-      rows.push(`Call: ${c.call_id}`, `Title: ${c.title ?? ""}`, `Summary: ${c.summary ?? ""}`);
-      if (r?.stdout_ref) rows.push(`stdout_ref: ${r.stdout_ref}`);
-      if (r) rows.push(`stdout excerpt:\n${r.stdout_excerpt || "(empty)"}`, `stderr excerpt:\n${r.stderr_excerpt || "(empty)"}`);
-    } else if (!folded && !engineering) {
-      // A failed call often carries its only explanation on stderr.
-      const text = (r?.status === "ok" ? r.stdout_excerpt : r?.stderr_excerpt || r?.stdout_excerpt) ?? "";
-      if (text) preview.push(...terminalText(text).split("\n").filter(line => line.trim()));
-    }
-  }
-  return { tool, title: call.tool === "local_exec" ? `${call.summary} · this computer` : call.title ?? "", status, rows, preview, previewTail, excerpt: preview.length > 0 };
+  return { tool: TOOL_LABEL(call.tool), title: call.title, status, rows };
 }
 
-/** Human text for plain/dumb and /details, never JSON or terminal escape sequences. */
+/** Human text for plain/dumb and /details: one line per call, never JSON or terminal escape sequences. */
 export function blockText(block, options = {}) {
   const content = blockContent(block, options);
-  const head = `[${content.status ?? ""}] ${content.tool ? content.tool + " " : ""}${content.title}`;
+  const head = `[${content.status}] ${content.tool ? content.tool + " " : ""}${content.title}`;
   const rows = content.rows.map(terminalText);
-  const preview = content.preview ?? [];
-  if (preview.length) {
-    rows.push(...(content.previewTail ? preview.slice(-3) : preview.slice(0, 3)));
-    rows.push(preview.length > 3 ? "… output excerpt truncated · ctrl+o for the full block" : "output excerpt · ctrl+o for the full block");
-  }
   return `${plainLine(head)}${rows.length ? ": " + rows.join("\n  ") : ""}`;
 }

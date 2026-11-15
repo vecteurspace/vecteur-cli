@@ -12,16 +12,11 @@ function defaultName(casRef) {
 /**
  * Stream admitted bytes to a private sibling, then publish with an atomic no-overwrite link.
  * A remote filename never reaches this path: the caller either supplies --output or receives
- * a digest-derived basename, so traversal and shell metacharacters cannot arrive from RunWire.
+ * a digest-derived basename, so traversal and shell metacharacters cannot arrive from the wire.
  */
 export async function downloadArtifact(client, casRef, projectId, output) {
   return downloadTo(output ?? defaultName(casRef),
     chunk => client.artifactGet(casRef, projectId, chunk));
-}
-
-export async function downloadProjection(client, projectId, runId, projection, output) {
-  return downloadTo(output ?? `transfer-table-${projection.projection_id.slice(11, 23)}.json`,
-    chunk => client.projectionGet(projectId, runId, projection, chunk));
 }
 
 async function downloadTo(filename, fetchBytes) {
@@ -69,7 +64,7 @@ export async function exportRun(client, run, projectId, directory) {
     await writeFile(join(target, name), bytes, { flag: "wx", mode: 0o600 });
     files.push({ path: join(target, name), bytes: Buffer.byteLength(bytes) });
   };
-  if (sections.answer !== undefined) await write("answer.md", sections.answer);
+  if (sections.answer) await write("answer.md", sections.answer);
   await write("run.json", canonicalJson(run));
   const used = new Set(["answer.md", "run.json"]);
   for (const { artifact } of sections.artifacts) {

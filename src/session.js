@@ -1,63 +1,23 @@
-import { Executor } from "./executor.js";
 import { EventEmitter } from "node:events";
-import { createHash, randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
-import { mkdir, open, readFile, readdir, writeFile } from "node:fs/promises";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import { writeFile } from "node:fs/promises";
+import { basename, isAbsolute, relative, resolve } from "node:path";
 import { VecteurClient, CliError, configuration, delay, isTokenShaped, requestTimeout,
   resolveOrigin, shouldOpenBrowser, waitForDeviceAuthorization } from "./client.js";
 import { readCredentials, writeCredentials, clearCredentials } from "./credentials.js";
 import { FolderRegistry, UNSIGNED_ACCOUNT } from "./folders.js";
-import { runView } from "./blocks.js";
-import { produceIntent } from "./produce.js";
+import { runView, artifactRows } from "./blocks.js";
 import { downloadArtifact, exportRun } from "./download.js";
-import { humanRun, runSections, safeArtifactName, stopViewOf, turnFooter, terminalText, proposalReview, adoptionHint } from "./format.js";
-import { localProcessEnv, withLocalLock, withAdmissionLock, executionGrant, checkGrantLive, qualify, currentGrant, createGrant, prepareConsent, checkConsent, endGrants, pinCheck, selectionMetadata,
+import { humanRun, runSections, turnFooter, terminalText, proposalReview, adoptionHint } from "./format.js";
+import { withLocalLock, withAdmissionLock, qualify, currentGrant, createGrant, prepareConsent, checkConsent, endGrants, pinCheck, selectionMetadata,
   readConfined, recordUpload, discover, nameOffers, tombstoned, writeNewConfined,
   reconcileWrites, reconcileAdmissions, inspectTarget, observeTargetMetadata, observeTargets, proposals, proposalName, writeProposalConfined, downloadLocalArtifact } from './localfiles.js';
-import { artifactRows } from './blocks.js';
-import { ARTIFACT_MEDIA_TYPES, CATALOGUE_ENVELOPE_SHA256, MODEL_CATALOGUE, PRODUCT_ROUTES } from "./contract.js";
+import { ARTIFACT_MEDIA_TYPES, MODEL_CHOICES } from "./contract.js";
+import { OWNER_WORDED } from "./client.js";
 import { openBrowser } from "./browser.js";
-
-const PACKAGE_MARKER = ".vecteur-package.json";
-const FLAG = /^-{1,2}[A-Za-z][A-Za-z0-9-]*(=[A-Za-z0-9_.:-]+)?$/;
-const WORD = /^[A-Za-z0-9_.:\/-]+$/;
-const commandDisplay = command => JSON.stringify(command).replace(/[\p{Cc}\p{Cf}]/gu,
-  character => character.split('').map(unit => '\\u'+unit.charCodeAt(0).toString(16).padStart(4, '0')).join(''));
-
-/** The folder holding kc.json: the package folder itself, or the one directory an unzipped archive made in it. */
-async function packageRoot(directory) {
-  const entries = await readdir(directory, { withFileTypes: true });
-  if (entries.some(entry => entry.isFile() && entry.name === "kc.json")) return directory;
-  const dirs = entries.filter(entry => entry.isDirectory());
-  if (dirs.length === 1) {
-    const inner = join(directory, dirs[0].name);
-    if ((await readdir(inner)).includes("kc.json")) return inner;
-  }
-  throw new CliError("package_invalid", "No kc.json in the package folder; unzip the package there first");
-}
-
-/** The approved process template: `python -m pytest` plus plain flags and paths inside the package. */
-export function approvedTemplate(manifest, root) {
-  const argv = manifest?.test;
-  if (!Array.isArray(argv) || argv[0] !== "python" || argv[1] !== "-m" || argv[2] !== "pytest") {
-    throw new CliError("template_unapproved", "The declared test command must be: python -m pytest [flags] [paths]");
-  }
-  for (const item of [...argv.slice(3), ...(manifest.paths ?? [])]) {
-    if (typeof item !== "string" || isAbsolute(item) || item.split(/[\\/]/).includes("..")
-        || relative(root, resolve(root, item)).startsWith("..")) {
-      throw new CliError("path_escape", `"${item}" leaves the package folder`);
-    }
-    if (!FLAG.test(item) && !WORD.test(item.replace(/\*/g, ""))) {
-      throw new CliError("template_unapproved", `"${item}" is not a plain flag or path`);
-    }
-  }
-  return argv;
-}
 
 export const NEW_FOLDER = "New folder — send an ask or /link an existing Project";
 const AUTH_ERRORS = new Set(["pat_expired", "pat_invalid", "pat_revoked"]);
-const MAX_QUIET_ROTATIONS = 30; // 30 x 120 s request bound: one hour of silence
 const TRANSIENT = new Set(["request_failed", "request_timeout", "terminal_invalid"]);
 
 /** One cloud session, two real renderers. It owns no terminal, device or native-agent runtime. */
@@ -75,12 +35,9 @@ export class Session extends EventEmitter {
 
   view(now = Date.now()) {
     const canEdit = this.project?.role !== "VIEWER";
-    const activity = !canEdit && this.status === "Waiting for your answer" ? "Waiting for an editor" : this.status;
-    this.projectionCache ??= {};
-    const projection = runView(this.run, this.projectionCache, now);
-    const requested = this.model ?? "auto";
-    const modelLabel = MODEL_CATALOGUE.find(row => row.profile_id === requested)?.label
-      ?? PRODUCT_ROUTES.find(row => row.route_id === requested)?.label ?? requested;
+    const activity = this.status;
+    const projection = runView(this.run, now);
+    const modelLabel = MODEL_CHOICES.find(row => row.route_id === (this.model ?? "auto"))?.label ?? this.model;
     const bound = this.binding?.state === "bound" && this.binding.projectId === this.project?.id;
     return { origin: this.origin, folder: bound ? relative(this.binding.folder.path, this.cwd) || "." : this.cwd,
       account: this.account, project: this.project,
@@ -89,12 +46,11 @@ export class Session extends EventEmitter {
       offline: this.offline, issue: this.issue, login: this.loginChallenge, release: this.release,
       // First use: signed in and online, the folder resolved to no binding/Project/Run, nothing pending.
       firstUse: !!this.account && !this.offline && !this.busy && !this.project && !this.run && this.status === NEW_FOLDER,
-      attachments: this.attachments.map(item => ({ path: item.rel ?? item.path, size: item.size ?? item.bytes.length })),
-      egress: this.attachments.length ? `Upload ${this.attachments.map(item => `${item.rel ?? item.path} (${item.size ?? item.bytes.length} B)`).join(", ")} to ${this.project?.name ?? "a new Project"} on ${this.origin}` : null,
-      lead: "Laplace", location: "Vecteur cloud", model: modelLabel,
+      attachments: this.attachments.map(item => ({ path: item.rel, size: item.size })),
+      egress: this.attachments.length ? `Upload ${this.attachments.map(item => `${item.rel} (${item.size} B)`).join(", ")} to ${this.project?.name ?? "a new Project"} on ${this.origin}` : null,
+      location: "Vecteur cloud", model: modelLabel,
       run: projection, available: { submit: !this.offline && !!this.account && canEdit && !this.busy && !this.run?.open,
-        cancel: !this.offline && !!this.account && canEdit && !!this.run?.open, steer: !this.offline && !!this.account && canEdit && !!this.run?.open && !projection.question,
-        localExecution: false, nativeAgent: false } };
+        cancel: !this.offline && !!this.account && canEdit && !!this.run?.open } };
   }
 
   change() { if (!this.closed) this.emit("change", this.view()); }
@@ -132,7 +88,6 @@ export class Session extends EventEmitter {
   }
 
   workOffline() {
-    this.executor?.stop(); this.execAllowed = false;
     this.cancelLogin(); this.cancelPrompt(); this.followController?.abort(); this.generation++;
     this.offline = true; this.issue = null;
     if (!this.registry) {
@@ -329,18 +284,24 @@ export class Session extends EventEmitter {
         this.run = { ...newest, open: !newest.terminal };
         if (newest.run_id !== this.lastPrintedRun && newest.ask !== undefined) this.message(newest.ask, "user");
         if (this.run.open) {
-          this.status = runView(this.run, this.projectionCache).question ? "Waiting for your answer" : "Running";
+          this.status = "Running";
           this.change(); void this.follow().catch(error => this.report(error));
         }
-        else { this.status = newest.terminal; if (this.announceRun()) await this.announceFooter(this.project.id); this.change(); await this.offerSaves(); }
+        else { this.status = newest.terminal; if (await this.announceRun()) await this.announceFooter(this.project.id); this.change(); await this.offerSaves(); }
       } else { this.run = null; this.change(); }
     }
   }
 
-  announceRun(stopOffer = undefined) {
-    if (this.lastPrintedRun === this.run?.run_id) return false;
+  async announceRun() {
+    const run = this.run;
+    if (!run?.terminal || this.lastPrintedRun === run.run_id) return false;
+    // At a limit the server says what this reader may do; a failed read names no plan and never fails the Run.
+    const stopOffer = run.terminal === "budget" ? await this.client.stopOffer(run.run_id) : undefined;
+    if (this.run !== run || this.closed) return false;
+    if (stopOffer) void this.client.stopEvent(run.run_id, { event: "shown", surface: "cli" });
     const options = { stopOffer, origin: this.origin };
-    this.message(this.run?.terminal ? humanRun(this.run, options) : runView(this.run).transcript, "answer", { runId: this.run?.run_id, sections: runSections(this.run, options) }); this.lastPrintedRun = this.run?.run_id;
+    this.message(humanRun(run, options), "answer", { runId: run.run_id, sections: runSections(run, options) });
+    this.lastPrintedRun = run.run_id;
     return true;
   }
 
@@ -392,26 +353,14 @@ export class Session extends EventEmitter {
       : await this.client.projectCreate(pending.name, pending.workspaceId, undefined, pending.key);
     if (!pending.projectId) await withAdmissionLock(() => {
       if(consent)checkConsent(this.localPin(),consent.epoch,this.env);
-      // /exec consent given before this first send has no Project yet and completeCreation ends folder grants:
-      // re-issue it for the new Project only if the consented generation is still live (revoke/relink stay fatal).
-      const carry = this.execGrant?.projectId === undefined && this.execGrant;
-      if (carry) checkGrantLive(carry, this.localPin(), this.env);
       this.registry.completeCreation(pending.key, project.id);
       if(consent)consent.epoch=prepareConsent(this.localPin(),this.env);
-      if (carry) this.execGrant = executionGrant({ ...this.localPin(), projectId: project.id, role: project.role }, this.env);
     },this.env);
     this.project = project; this.binding = this.registry.binding(); this.provenance = "binding";
     return project;
   }
 
-  /** v5 §2.5 explicit Produce: sends one ask whose named specialist child the host starts before Engineering's turn; its
-   * rows carry the specialist's label. `produceIntent` owns the grammar and the closed entries. */
-  produce(argument) {
-    const { ask, intent } = produceIntent(argument);
-    return this.submit(ask, intent);
-  }
-
-  async submit(text = this.draft, intent = undefined) {
+  async submit(text = this.draft) {
     if (this.busy) throw new CliError("session_busy", "The current submission is still being reconciled");
     if (!text.trim()) return;
     if (this.offline || !this.account) {
@@ -423,11 +372,8 @@ export class Session extends EventEmitter {
       return;
     }
     if (this.run?.open) {
-      this.setDraft(text); const run = this.run;
-      const action = await this.choose("This Run is still working", [
-        { label: "Keep drafting the next question", value: "draft" }, { label: "Send as steering to this Run", value: "steer" },
-      ]);
-      if (action === "steer" && this.run === run && run.open) await this.steer(text);
+      // One turn at a time: the reply to a question is the next turn, after this one closes.
+      this.setDraft(text); this.status = "This Run is still working — draft kept; send it when the Run ends"; this.change();
       return;
     }
     this.setDraft(text);
@@ -435,13 +381,13 @@ export class Session extends EventEmitter {
     const draftRef = structuredClone(this.registry?.draftRef ?? null);
     this.busy = true; this.status = "Submitting"; this.change();
     try {
-      if (this.execPending || this.registry?.state().pendingRun) throw new CliError("submission_pending", "Use /resume to resolve the interrupted submission; your new draft is kept");
+      if (this.registry?.state().pendingRun) throw new CliError("submission_pending", "Use /resume to resolve the interrupted submission; your new draft is kept");
       if (this.project?.role === 'VIEWER') throw new CliError('role_forbidden', 'Editor access is required to ask Vecteur');
       if (await this.offerAttachments(text) === false) { this.status = 'Draft kept — named files not offered'; return; }
       const consentAccount=this.account.id;
       const destination = { origin: this.origin, id: this.project?.id, name: this.project?.name ?? this.projectName ?? basename(this.cwd) };
       let consent = false;
-      if (this.attachments.some(f => !f.generated)) {
+      if (this.attachments.length) {
         const grant = this.project && currentGrant(this.localPin(), this.env);
         if (!grant) {
           const epoch=await withLocalLock(()=>prepareConsent(this.localPin(),this.env),this.env);
@@ -451,11 +397,10 @@ export class Session extends EventEmitter {
       }
       const project = await this.ensureProject(consent || undefined);
       if (project.role === "VIEWER") throw new CliError("role_forbidden", "Editor access is required to ask Vecteur");
-      if (this.attachments.some(f => !f.generated) && consent && (destination.origin !== this.origin || (destination.id ? destination.id !== project.id : destination.name !== project.name))) {
+      if (this.attachments.length && consent && (destination.origin !== this.origin || (destination.id ? destination.id !== project.id : destination.name !== project.name))) {
         if (!await this.confirmFiles({ origin: this.origin, id: project.id, name: project.name })) return;
       }
-      if (this.execAllowed === undefined) await this.execConsent("on");
-      const executor = await withAdmissionLock(async () => {
+      await withAdmissionLock(async () => {
         const newest = await this.client.projectNewestRun(project.id);
         const checkDestination=()=>{
           if(this.project?.id!==project.id || this.origin!==destination.origin || this.account?.id!==consentAccount) throw new CliError('grant_changed','Upload destination changed; draft kept');
@@ -467,20 +412,20 @@ export class Session extends EventEmitter {
         }
         const selections = [];
         let grant;
-        if (this.attachments.some(f => !f.generated)) {
+        if (this.attachments.length) {
           grant = currentGrant(this.localPin(), this.env);
           if (!grant) { if (!consent) throw new CliError('grant_changed', 'Permission changed; confirm files again'); grant = createGrant(this.localPin(), this.env, consent.epoch); }
         }
         for (const item of this.attachments) {
           checkDestination();
-          if (!item.generated) pinCheck(grant, this.localPin(), this.env);
+          pinCheck(grant, this.localPin(), this.env);
           if (item.generation !== undefined && item.generation !== grant.generation) throw new CliError('grant_changed', 'Selection withdrawn; select it again');
-          const file = item.generated ? {rel:basename(item.path),bytes:item.bytes,size:item.bytes.length,media:item.media} : readConfined(grant, item.rel, this.env, { selected: item });
-          if (!item.generated) pinCheck(grant, this.localPin(), this.env);
+          const file = readConfined(grant, item.rel, this.env, { selected: item });
+          pinCheck(grant, this.localPin(), this.env);
           this.message(`Upload ${file.rel} (${file.size} B) to ${project.name} on ${this.origin}`);
           item.source = await this.client.inputAdd(project.id, file.bytes, file.media);
           checkDestination();
-          if (!item.generated) recordUpload(grant, file, item.source, this.env);
+          recordUpload(grant, file, item.source, this.env);
           const offer = item.source.offer ?? await this.client.inputOffer(project.id, item.source);
           if (!offer.extracts.length) throw new CliError("extraction_unavailable", "This file has no selectable extracts");
           selections.push({ source_handle: { cas_ref: item.source.cas_ref, acquisition_ref: item.source.acquisition_ref },
@@ -490,30 +435,9 @@ export class Session extends EventEmitter {
           || a.source_handle.acquisition_ref.localeCompare(b.source_handle.acquisition_ref));
         const body = { ask: text, attachments: selections.map(item => item.source_handle),
           parent_state_hash: newest?.state_hash ?? null, ui_context: { layout: 'folder' },
-          ...(selections.length ? { selections } : {}), ...(this.model ? { model_choice: this.model } : {}),
-          ...(intent === undefined ? {} : { intent }) };
-        this.executor?.stop(); this.executor = null;
-        if (this.execAllowed) {
-          const pin = this.localPin();
-          const grant = this.execGrant;
-          pinCheck(grant, pin, this.env, { execution: true });
-          this.executor = new Executor({ client: this.client, grant, pin: () => this.localPin(), env: this.env,
-            session: this.execSessionPolicy ?? false, approve: ({ command, timeout, folder, signal }) => {
-              const prompt = this.choose(
-              `Run on this computer in ${JSON.stringify(folder)} (${timeout}s)?\n${commandDisplay(command)}`, [
-                { label: "Allow once", value: "once" }, { label: "Allow for this session", value: "session" }, { label: "Decline", value: "decline" }], { liveTitle: `Run this bash command (${timeout}s)?` });
-              const id = this.prompt?.id;
-              const cancel = () => { if (id === this.prompt?.id) this.cancelPrompt(); };
-              signal.addEventListener('abort', cancel, { once: true });
-              return prompt.finally(() => signal.removeEventListener('abort', cancel));
-            } });
-          body.local_exec = this.executor.descriptor;
-        }
-        const pending = this.executor ? (this.execPending = { projectId: project.id, body, key: randomUUID() })
-          : this.registry.reserveRun(project.id, body, draftRef);
-        return this.admitPendingLocked(pending);
+          ...(selections.length ? { selections } : {}), ...(this.model ? { model_choice: this.model } : {}) };
+        return this.admitPendingLocked(this.registry.reserveRun(project.id, body, draftRef));
       }, this.env);
-      this.startExecutor(executor);
       void this.follow().catch(error => this.report(error));
     } catch(error) {
       if(['state_busy','state_fork'].includes(error.code)) await this.loadNewest();
@@ -523,59 +447,39 @@ export class Session extends EventEmitter {
   }
 
   async admitPending(pending) {
-    let executor;
-    try { executor = await withAdmissionLock(() => this.admitPendingLocked(pending), this.env); }
+    try { await withAdmissionLock(() => this.admitPendingLocked(pending), this.env); }
     catch(error) { if(['state_busy','state_fork'].includes(error.code)) await this.loadNewest(); throw error; }
-    this.startExecutor(executor);
     void this.follow().catch(error=>this.report(error));
   }
 
   async admitPendingLocked(pending) {
-    const ephemeral = pending === this.execPending;
-    if (!ephemeral && pending.body?.local_exec !== undefined) throw new CliError('admission_unresolved', 'Saved execution consent expired; observe the Project history');
     if (this.project?.id !== pending.projectId) {
       const project = await this.client.projectGet(pending.projectId);
       this.followController?.abort(); this.generation++; this.run = null; this.project = project; this.change();
     }
-    if (ephemeral) {
-      if (!this.executor) throw new CliError("admission_unresolved", "Executor consent ended; reconcile through Project history");
-      this.executor.check();
-    }
     let ack;
     try { ack = await this.client.runAdmit(pending.projectId, pending.body, pending.key); }
     catch (error) {
-      if (["state_busy", "state_fork"].includes(error.code) || error.admission === "refused") {
-        if (ephemeral) { this.execPending = null; this.executor?.stop(); }
-        else this.registry.rejectRunAdmission(pending.key);
+      const worded = OWNER_WORDED.includes(error.code);
+      if (["state_busy", "state_fork"].includes(error.code) || error.admission === "refused" || worded) {
+        this.registry.rejectRunAdmission(pending.key);
       }
       if (["state_busy", "state_fork"].includes(error.code)) {
         throw new CliError(error.code, "Submission refused; draft kept. Review the latest Run and explicitly send again.");
       }
+      // A read-only (v5) Project or a retired door: the owner's own sentence, nothing admitted, draft kept.
+      if (worded) throw new CliError(error.code, `${error.message} Nothing was admitted; draft kept.`);
       // The owner marked this key as never admittable (nothing dispatched): release only this
       // reservation and keep the draft. Any other failure stays pending for /resume.
-      if (error.admission === "refused") {
-        if (error.code === "produce_unavailable") throw new CliError(error.code, `${error.message}. Draft kept.`);
-        throw new CliError(error.code, "Submission refused before it ran; draft kept. Fix it and send again.");
-      }
+      if (error.admission === "refused") throw new CliError(error.code, "Submission refused before it ran; draft kept. Fix it and send again.");
       throw error;
     }
-    if (!ephemeral) this.registry.finishRunAdmission(pending.key);
-    this.execPending = null;
+    this.registry.finishRunAdmission(pending.key);
     if (this.draft === pending.body.ask) { clearTimeout(this.draftTimer); this.draft = ""; }
     this.attachments = [];
     this.message(pending.body.ask, "user");
-    this.run = { ...ack, ask: pending.body.ask, controls: [], events: [], terminal: "", open: true };
+    this.run = { ...ack, ask: pending.body.ask, events: [], terminal: "", open: true };
     this.status = "Running"; this.change();
-    return ephemeral ? this.executor : null;
-  }
-
-  startExecutor(executor) {
-    if (executor) {
-      this.execPump = executor.pump(this.run.run_id).catch(error => {
-        executor.stop();
-        if (this.executor === executor) { this.execAllowed = false; this.execGrant = null; this.report(error); }
-      });
-    }
   }
 
   async resume() {
@@ -584,7 +488,6 @@ export class Session extends EventEmitter {
     if (!this.account || !this.registry) return this.initialize();
     await withAdmissionLock(() => reconcileAdmissions(this.client, this.origin, this.env), this.env);
     const state = this.registry.state();
-    if (this.execPending) return this.admitPending(this.execPending);
     if (state.pendingRun) {
       this.busy = true; this.change();
       try { return await this.admitPending(state.pendingRun); }
@@ -598,96 +501,35 @@ export class Session extends EventEmitter {
   async follow() {
     this.followController?.abort();
     const controller = new AbortController(); this.followController = controller;
-    const run = this.run, executor = this.executor; const generation = ++this.generation;
+    const run = this.run; const generation = ++this.generation;
     const projectId = this.project.id;
-    let attempts = 0, quiet = 0;
-    // Read independently of SSE activity: a quiet/waiting Run can receive controls in another terminal.
-    let controlTimer, controlFailures = 0, controlState = "available";
-    const current = () => !controller.signal.aborted && generation === this.generation && this.run === run && run.open;
-    const refreshControls = async () => {
-      let interval = 3000, permanent = false;
-      try {
-        const controls = await this.client.runControls(run.run_id, controller.signal);
-        if (!current()) return;
-        if (controlState !== "available") this.message("Controls available — live updates restored.");
-        controlState = "available"; controlFailures = 0;
-        if (JSON.stringify(run.controls) !== JSON.stringify(controls)) { run.controls = controls; this.change(); }
-      } catch (error) {
-        if (!current()) return;
-        const transient = ["request_failed", "request_timeout", "http_429"].includes(error.code)
-          || /^http_5\d\d$/.test(error.code) || error.status === 429 || error.status >= 500;
-        permanent = !transient;
-        interval = Math.min(1000 * 2 ** controlFailures++, 15000);
-        const state = `${permanent ? "unavailable" : "retrying"}:${error.code}`;
-        if (state !== controlState) this.message(`Controls unavailable (${error.code}) — ${permanent ? "live updates stopped" : "retrying"}.`);
-        controlState = state;
-      }
-      if (current() && !permanent) controlTimer = setTimeout(refreshControls, interval);
-    };
-    void refreshControls();
-    controller.signal.addEventListener("abort", () => clearTimeout(controlTimer), { once: true });
+    let attempts = 0;
     try {
       while (!this.closed && generation === this.generation && run?.open) {
         try {
           const direct = await this.client.runEvents(run.run_id, event => {
             if (generation !== this.generation) return;
-            quiet = 0; run.events.push(event);
-            this.status = runView(run, this.projectionCache).question ? "Waiting for your answer" : "Running";
-            this.change();
+            run.events.push(event); this.status = "Running"; this.change();
           }, controller.signal, [...run.events]);
           if (generation !== this.generation) return;
-          this.run = { ...direct, accepted_at: direct.run_id === run.run_id ? run.accepted_at : undefined, ask: run.ask, open: !direct.terminal };
-          const stopped = direct.terminal ? stopViewOf(direct.events) : null;
-          const stopOffer = stopped ? await this.client.stopOffer(direct.run_id, controller.signal) : undefined;
+          this.run = { ...direct, accepted_at: run.accepted_at, ask: run.ask, open: !direct.terminal };
+          this.status = direct.terminal === "budget" ? "Paused at a limit" : direct.terminal;
+          await this.announceRun();
           if (generation !== this.generation) return;
-          if (stopped?.cause === "plan_limit") void this.client.stopEvent(direct.run_id, { event: "shown", surface: "cli" });
-          this.status = stopped ? "Paused at a limit" : direct.terminal; this.announceRun(stopOffer);
           await this.announceFooter(projectId);
           this.change(); await this.offerSaves().catch(error=>this.report(error)); return;
         } catch (error) {
           if (controller.signal.aborted || this.closed || generation !== this.generation) return;
           if (AUTH_ERRORS.has(error.code)) { this.report(error); return; }
-          // The SSE request rotates at its time bound even during a healthy clarification park.
-          // The independent authenticated pump owns executor liveness; a poll failure stops it.
-          // A stream that rotates MAX_QUIET_ROTATIONS times in a row without one event is wedged, not parked.
-          if (error.code === "request_timeout" && executor && !executor.closed) {
-            if (++quiet > MAX_QUIET_ROTATIONS) throw new CliError("event_stream_stalled", "The Run's event stream delivered nothing for too long; local execution stopped. /resume to reconnect.");
-            attempts = 0;
-          }
-          else { this.executor?.stop(); this.execAllowed = false; }
           if (!TRANSIENT.has(error.code) || ++attempts > 5) throw error;
           this.status = "Connection lost — reconnecting to the same Run"; this.change();
           await delay(Math.min(500 * 2 ** attempts, 8_000), controller.signal);
         }
       }
-    } finally {
-      executor?.stop();
-      if (this.executor === executor) {
-        this.execSessionPolicy = executor?.session ?? false;
-        this.executor = null;
-      }
-      clearTimeout(controlTimer); controller.abort();
-    }
+    } finally { controller.abort(); }
   }
 
   attach(path) { return this.transition(() => this.selectAttachment(path)); }
-
-  async execConsent(argument) {
-    if (argument === "off") {
-      this.execAllowed = false; this.execGrant = null; this.execSessionPolicy = false; this.executor?.stop('executor_revoked');
-      this.message("Local execution revoked."); return;
-    }
-    if (argument !== "on") throw new CliError("usage_invalid", "Use /exec on or /exec off");
-    qualify();
-    const pin = this.localPin();
-    const granted = await this.choose(`Allow Vecteur to run commands in ${pin.root.path}? Commands have your OS permissions, including network access and writes outside this folder. Only scanned output tails return to Vecteur.`,
-      [{ label: "Allow, ask before each command", value: true }, { label: "No", value: false }]);
-    this.execAllowed = granted;
-    if (granted) this.execGrant = await withLocalLock(() => {
-      if (this.project?.id !== pin.projectId || this.account?.id !== pin.accountId) throw new CliError("grant_changed", "Destination changed");
-      return executionGrant(pin, this.env);
-    }, this.env);
-  }
 
   localPin() {
     return { origin: this.origin, accountId: this.account?.id, projectId: this.project?.id, role: this.project?.role,
@@ -701,7 +543,7 @@ export class Session extends EventEmitter {
   }
 
   async confirmFiles(destination) {
-    const files = this.attachments.filter(f=>!f.generated);
+    const files = this.attachments;
     return this.choose(`${this.fileConsentText(destination)}\nSend ${files.length} selected file${files.length===1?'':'s'}?\n${files.map(f=>`[x] ${f.rel} (${f.size} B)`).join('\n')}`, [
       { label: 'Yes, allow select and save-new', value: true }, { label: 'No, keep draft and selections', value: false },
     ], { liveTitle: `Send ${files.length} selected file${files.length===1?'':'s'}?` });
@@ -794,7 +636,6 @@ export class Session extends EventEmitter {
   }
 
   async revokeFiles() {
-    this.executor?.stop(); this.execAllowed = false;
     this.requireLogin();
     return withLocalLock(() => {
       endGrants({origin:this.origin,accountId:this.account.id,root:this.registry.folder.path},this.env);
@@ -835,8 +676,8 @@ export class Session extends EventEmitter {
     const rows = artifactRows(runView(this.run).artifacts);
     const saved = this.account && this.project ? await this.scanLocalTargets() : [];
     this.message([
-      ...this.attachments.map(item=>`Pending: ${terminalText(item.rel ?? item.path)} (${item.size ?? item.bytes.length} bytes; not uploaded)`),
-      ...rows.map(({artifact:a,number,sameBytesAs})=>`${number}. ${terminalText(a.path ?? a.filename)} · ${a.kind} · /download ${number} · /files diff ${number}${sameBytesAs?` · same bytes as ${sameBytesAs}`:''} · /web`),
+      ...this.attachments.map(item=>`Pending: ${terminalText(item.rel)} (${item.size} bytes; not uploaded)`),
+      ...rows.map(({artifact:a,number,sameBytesAs})=>`${number}. ${terminalText(a.path)} · ${a.kind} · /download ${number} · /files diff ${number}${sameBytesAs?` · same bytes as ${sameBytesAs}`:''} · /web`),
       ...saved.map((p,i)=>`${rows.length+i+1}. Proposal ${terminalText(p.path)} → ${terminalText(p.originalPath)} · /files diff ${rows.length+i+1}`),
     ].join('\n') || 'No selected files or artifacts.');
   }
@@ -909,9 +750,7 @@ export class Session extends EventEmitter {
     const epoch = !grant ? await withLocalLock(()=>prepareConsent(this.localPin(),this.env),this.env) : null;
     const rowLabel=row=>{
       const a=row.artifact;
-      const evidence=run.events.flatMap(e=>e.kind==='tool_result'?e.payload?.files_changed??[]:[])
-        .find(f=>f.path===a.path && 'sha256:'+f.sha256.replace(/^sha256:/,'')===a.cas_ref);
-      return terminalText(`${selected.has(row)?'[x]':'[ ]'} ${a.path}${evidence?.bytes===undefined?'':` (${evidence.bytes} B)`}${row.creates.length?` · creates ${row.creates.map(p=>p+'/').join(', ')}`:''}${row.proposalPath?` · ${row.snapshot.classification ?? 'comparison after local read consent'} · save beside it as ${row.proposalPath}`:''}`)
+      return terminalText(`${selected.has(row)?'[x]':'[ ]'} ${a.path} (${a.bytes} B)${row.creates.length?` · creates ${row.creates.map(p=>p+'/').join(', ')}`:''}${row.proposalPath?` · ${row.snapshot.classification ?? 'comparison after local read consent'} · save beside it as ${row.proposalPath}`:''}`)
         +(row.snapshot.classification==='local changed'?`\nyou changed ${terminalText(a.path)} since Vecteur read it; your edit is kept`:row.snapshot.classification==='first sync'?'\nVecteur has no earlier version of this file from you':'');
     };
     let live=grant;
@@ -1048,94 +887,23 @@ export class Session extends EventEmitter {
       this.run = { ...selected.response, accepted_at: selected.accepted_at, open: !selected.response.terminal };
       this.message(selected.request.ask, "user");
       if (this.run.open) void this.follow().catch(error => this.report(error));
-      else { this.message(runView(this.run).transcript, "answer", { runId: this.run.run_id, sections: runSections(this.run) }); await this.announceFooter(this.project.id); }
+      else { this.message(humanRun(this.run), "answer", { runId: this.run.run_id, sections: runSections(this.run) }); await this.announceFooter(this.project.id); }
       this.status = "Viewing history — next send continues the current Project head"; this.change();
       return;
     }
   }
 
-  async steer(text) {
-    this.requireLogin();
-    if (!this.run?.open) throw new CliError("run_not_open", "There is no open Run to steer");
-    const control = { id: randomUUID(), kind: text ? "steer" : "answer_now", ...(text ? { text } : {}) };
-    const run = this.run, client = this.client;
-    const value = await client.runControl(run.run_id, control);
-    if (this.run !== run || this.client !== client) return;
-    run.controls = [...(run.controls ?? []).filter(c => c.id !== value.id), value].sort((a, b) => a.sequence - b.sequence);
-    this.message(`${value.kind === "steer" ? "Steer" : "Answer now"} received by Vecteur.`);
-    this.change();
-  }
-
-  async answer() {
-    this.requireLogin();
-    const run = this.run, client = this.client;
-    const question = runView(run).question;
-    if (!question?.questions?.length) throw new CliError("question_unavailable", "There is no pending clarification");
-    const current = () => {
-      this.requireLogin();
-      if (this.run !== run || this.client !== client || runView(this.run).question?.id !== question.id) throw new CliError("question_resolved", "This clarification has already been resolved; your answer was not sent");
-    };
-    if (this.clarificationDraft?.run !== run || this.clarificationDraft?.client !== client || this.clarificationDraft?.id !== question.id) {
-      this.clarificationDraft = { run, client, id: question.id, answers: [] };
-    }
-    const { answers } = this.clarificationDraft;
-    while (true) {
-      for (const item of question.questions.slice(answers.length)) {
-        const options = [...item.options.map(option => ({ label: `${option.label}${option.description ? ` — ${option.description}` : ""}`, value: option.label })),
-          { label: "Write an answer", value: null }];
-        const response = item.options.length ? await this.choose(
-          item.question + (item.multiSelect ? " (choose numbers separated by commas)" : ""), options,
-          { multiple: item.multiSelect === true }) : null;
-        const selected = Array.isArray(response) ? response : [response];
-        const answer = { id: item.id, selected: selected.filter(value => value !== null) };
-        if (selected.includes(null)) {
-          do { answer.custom = await this.choose(item.question, [], { typed: true }); }
-          while (!answer.custom.trim());
-        }
-        answers.push(answer);
-        current();
-      }
-      current();
-      this.message(answers.map((answer, i) => `${question.questions[i].question}\n${[...answer.selected, answer.custom].filter(Boolean).join('; ')}`).join("\n\n"));
-      const action = await this.choose("Review your answers before sending", [
-        { label: "Submit these answers", value: "submit" }, { label: "Change answers", value: "edit" },
-        { label: "Keep answers for later in this session", value: "later" },
-      ]);
-      current();
-      if (action === "later") return;
-      if (action === "submit") break;
-      answers.length = 0;
-    }
-    await this.client.clarificationAnswer(this.run.run_id, question.id, answers);
-    this.clarificationDraft = null;
-    this.status = "Answer submitted"; this.change();
-  }
-
   modelChoice() { return this.transition(() => this.selectModel()); }
 
   async selectModel() {
-    if (!this.account || this.account.model_cost_estimates.catalogue_envelope_sha256 !== CATALOGUE_ENVELOPE_SHA256) {
-      throw new CliError("catalogue_outdated", "Model catalogue differs from this CLI; install the origin's current version");
-    }
-    const options = [{ label: "Auto — Vecteur selects the model", value: null },
-      ...PRODUCT_ROUTES.filter(row => row.route_id !== "auto").map(row => ({ label: `${row.label} · ${row.candidates.map(item => item.jurisdiction).join(" → ")}`, value: row.route_id })),
-      ...MODEL_CATALOGUE.map(row => ({ label: `${row.label} · ${row.provider} · ${row.data_residency}`, value: row.profile_id }))];
-    this.model = await this.choose("Model for the next Run (Vecteur billing)", options); this.change();
+    this.model = await this.choose("Model for the next Run (Vecteur billing)", MODEL_CHOICES.map(row => ({
+      label: row.route_id === "auto" ? "Auto — Vecteur selects the model" : `${row.label} · ${row.level}`,
+      value: row.route_id === "auto" ? null : row.route_id })));
+    this.change();
   }
 
   modeDetails() {
-    const requested = this.model ?? "auto";
-    const route = PRODUCT_ROUTES.find(row => row.route_id === requested);
-    const profile = MODEL_CATALOGUE.find(row => row.profile_id === requested);
-    const matched = this.account?.model_cost_estimates.catalogue_envelope_sha256 === CATALOGUE_ENVELOPE_SHA256;
-    const destination = !matched ? "Catalogue unavailable or outdated — /login or update this CLI"
-      : route ? route.candidates.map(row => `${row.provider_id}/${row.model_id} (${row.jurisdiction})`).join(" → ")
-        : profile ? `${profile.provider} (${profile.data_residency})` : "Unknown";
-    let local = "unavailable on this platform";
-    try { qualify(); local = this.executor && !this.executor.closed ? "attached to this Run"
-      : this.execAllowed && this.execGrant ? "enabled for the next Run" : "available — /exec on to allow commands"; }
-    catch { /* qualify owns the supported platform boundary */ }
-    return `Lead: Laplace\nExecution: Vecteur cloud\nPayer: Project organization ${this.account?.org_id ?? "(sign in first)"}\nNext model: ${this.view().model}\nData destination: ${destination}\nLast Run profile: ${this.run?.profile || "not known"}\nLocal execution: ${local}`;
+    return `Execution: Vecteur cloud\nPayer: Project organization ${this.account?.org_id ?? "(sign in first)"}\nNext model: ${this.view().model}\nLast Run model: ${this.run?.requested_route_id || "not known"}`;
   }
 
   statusDetails() {
@@ -1143,7 +911,6 @@ export class Session extends EventEmitter {
   }
 
   async logout() {
-    this.executor?.stop(); this.execAllowed = false;
     return this.transition(async () => {
       this.requireLogin();
       const yes = await this.choose("Sign out here? Saved drafts stay with this account; a cloud Run keeps running.", [
@@ -1174,83 +941,6 @@ export class Session extends EventEmitter {
     this.message(`Downloaded ${result.bytes} verified bytes to ${result.path}`);
   }
 
-  /** Round trip: verified Code/package download into a new folder; the user runs it, then /attach the result. */
-  async package(index) {
-    this.requireLogin();
-    const item = runView(this.run).artifacts[index - 1];
-    if (!item) throw new CliError("artifact_unavailable", "Choose an artifact number from /files");
-    const directory = resolve(this.cwd, `vecteur-package-${item.cas_ref.slice(7, 19)}`);
-    await mkdir(directory, { mode: 0o700 }).catch(error => {
-      throw new CliError(error?.code === "EEXIST" ? "output_exists" : "export_failed", `could not create ${directory}`);
-    });
-    const result = await downloadArtifact(this.client, item.cas_ref, this.project.id, join(directory, safeArtifactName(item)));
-    // CU-2: the folder remembers which package revision it holds, so a local report binds to that revision only.
-    await writeFile(join(directory, PACKAGE_MARKER), JSON.stringify({ cas_ref: item.cas_ref, project_id: this.project.id,
-      run_id: this.run?.run_id ?? null, filename: item.filename }), { flag: "wx", mode: 0o600 });
-    this.lastPackage = directory;
-    this.message([`Saved ${result.bytes} verified bytes to ${result.path}`,
-      `Vecteur does not run it on its own. /run-package asks your consent and runs its declared tests here (unzip a .zip into ${directory} first),`,
-      "or run them yourself and /attach the report. A report is your evidence, never an accepted result."].join("\n"));
-  }
-
-  /** CU-2 (v5 §5): with explicit consent, run the declared test command of a downloaded Code package on this machine
-   *  as an approved process template (python -m pytest + plain flags, inside the package), stop its whole process
-   *  tree on /stop-package or at the wall, and stage the report — bound to the package revision it tested — for upload
-   *  on the next send. Without consent nothing runs. */
-  async runPackage(argument = "") {
-    this.requireLogin();
-    if (this.localRun) throw new CliError("package_running", "A package is already running; /stop-package stops it");
-    const directory = resolve(this.cwd, argument.trim() || this.lastPackage || ".");
-    let marker;
-    try { marker = JSON.parse(await readFile(join(directory, PACKAGE_MARKER), "utf8")); }
-    catch { throw new CliError("package_unbound", "Run only a package saved with /package (its folder records the revision)"); }
-    const root = await packageRoot(directory);
-    const raw = await readFile(join(root, "kc.json"));
-    let manifest;
-    try { manifest = JSON.parse(raw.toString("utf8")); } catch { throw new CliError("package_invalid", "kc.json is not JSON"); }
-    const argv = approvedTemplate(manifest, root);
-    if (marker.project_id !== this.project.id
-        || !runView(this.run).artifacts.some(item => item.cas_ref === marker.cas_ref)) {
-      throw new CliError("report_revision_mismatch", "This folder holds a package of another Project turn; open that turn first");
-    }
-    const ok = await this.choose([`Run on this machine, in ${root}:`, `  ${argv.join(" ")}`,
-      `Target ${manifest.target ?? "unspecified"}. It runs with your Python (${this.env.VECTEUR_PYTHON || "python3"}) and your user's rights; only its report is uploaded, on your next send.`].join("\n"), [
-      { label: "Run the declared tests", value: true }, { label: "Cancel", value: false }]);
-    if (!ok || this.closed) { this.message("Nothing ran."); return null; }
-    const started = Date.now();
-    const child = spawn(this.env.VECTEUR_PYTHON || "python3", argv.slice(1), {
-      cwd: root, detached: true, stdio: ["ignore", "pipe", "pipe"],
-      env: localProcessEnv(this.env, root) });
-    const out = [], err = [];
-    child.stdout.on("data", chunk => out.push(chunk)); child.stderr.on("data", chunk => err.push(chunk));
-    const run = this.localRun = { child, stopped: null };
-    const wall = setTimeout(() => this.stopPackage("wall"), Number(this.env.VECTEUR_PACKAGE_WALL_S || 600) * 1000);
-    const [code, signal] = await new Promise(done => child.on("close", (c, s) => done([c, s])));
-    clearTimeout(wall); clearTimeout(run.escalation);
-    try { process.kill(-child.pid, "SIGKILL"); } catch { /* the group is already gone */ }
-    this.localRun = null;
-    const tail = chunks => Buffer.concat(chunks).toString("utf8").slice(-8000);
-    const report = { schema: "vecteur.kc.local-test.v1", package_cas_ref: marker.cas_ref, project_id: marker.project_id,
-      run_id: marker.run_id, kc_json_sha256: createHash("sha256").update(raw).digest("hex"), target: manifest.target ?? null,
-      argv, exit_code: code, signal, stopped: run.stopped, seconds: (Date.now() - started) / 1000,
-      stdout_tail: tail(out), stderr_tail: tail(err) };
-    const bytes = Buffer.from(JSON.stringify(report, null, 1));
-    const path = join(directory, `kc-test-report-${marker.cas_ref.slice(7, 19)}-${started}.json`);
-    await writeFile(path, bytes, { flag: "wx", mode: 0o600 });
-    this.attachments.push({ path, bytes, media: "application/json", generated:true }); this.change();
-    this.message(`${run.stopped ? `Stopped (${run.stopped})` : code === 0 ? "Tests passed" : `Tests failed (exit ${code})`}; the report ${basename(path)} is staged for your next send.`);
-    return report;
-  }
-
-  /** Stop the running package: its whole process group, SIGTERM then SIGKILL after 2 s. */
-  stopPackage(reason = "user") {
-    const run = this.localRun;
-    if (!run) throw new CliError("package_not_running", "No package is running");
-    run.stopped = reason;
-    try { process.kill(-run.child.pid, "SIGTERM"); } catch { /* exited */ }
-    run.escalation = setTimeout(() => { try { process.kill(-run.child.pid, "SIGKILL"); } catch { /* exited */ } }, 2000);
-  }
-
   async exportRun(output) {
     this.requireLogin();
     if (!this.run || this.run.open) throw new CliError("run_unavailable", "Export needs a completed Run");
@@ -1274,7 +964,6 @@ export class Session extends EventEmitter {
       if (this.registry) this.registry.saveDraft(this.draft);
     }
     catch (error) { this.message(`Draft could not be saved: ${error.code ?? "store_error"}`, "error"); }
-    this.executor?.stop();
     this.closed = true; this.generation++; this.cancelLogin(); this.lifecycle.abort(); this.followController?.abort(); clearTimeout(this.draftTimer);
     this.rejectPrompt?.(new CliError("session_closed", "Session closed")); this.prompt = null;
     this.emit("close");

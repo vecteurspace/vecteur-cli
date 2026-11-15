@@ -5,8 +5,8 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import * as z from "zod/v4";
 
-import { CliError, VecteurClient, redact } from "./client.js";
-import { EVENT_KINDS, RETIRED_EVENT_KINDS, STORED_WIRE_VERSIONS, TERMINAL_STATES } from "./contract.js";
+import { CliError, OWNER_WORDED, VecteurClient, redact } from "./client.js";
+import { EVENT_KINDS, STORED_WIRE_VERSIONS, TERMINAL_STATES } from "./contract.js";
 import { canonicalJson } from "./format.js";
 import { artifactToFolder, materialAttach } from "./exchange.js";
 import { credentialsPath } from "./credentials.js";
@@ -21,21 +21,11 @@ const selectionInput = z.object({
   selected_extract_ids: z.array(z.string().min(1)).min(1),
   method: z.literal("exact-extract"),
 }).strict();
-// v5 §2.5 explicit Produce: one named specialist child, started by the host before Engineering's turn. A38: Code Produce
-// is off at the run door, so this tool does not offer it; the door's `produce_unavailable` words still name any entry kept off.
-const produceInput = z.object({
-  specialist: z.enum(["business", "knowledge"]).describe("Business, or Knowledge documents (profile nasa or esa; a document needs a completed analysis in this Project first)"),
-  mode: z.string().min(1).max(64),
-  target: z.string().min(1).max(256).optional(),
-  profile: z.string().min(1).max(256).optional(),
-  standard: z.string().min(1).max(256).optional(),
-}).strict();
 const submitInput = z.object({
   project_id: z.string().min(1),
   ask: z.string().min(1),
   selections: z.array(selectionInput).min(1).optional(),
   discard_pending_material: z.boolean().optional(),
-  produce: produceInput.optional(),
 }).strict();
 const runInput = z.object({ run_id: z.string().min(1) }).strict();
 const startInput = z.object({
@@ -49,21 +39,15 @@ const ackFields = {
   run_id: z.string().min(1), state_hash: z.string().min(1),
   accepted_at: z.number().int().safe(), requested_route_id: z.string().min(1),
 };
-const ackOutput = z.object(ackFields).strict();
 const startOutput = z.object({ ...ackFields, parent_state_hash: z.string().nullable() }).strict();
-const answerInput = z.object({
-  run_id: z.string().min(1), clarification_id: z.string().min(1),
-  answers: z.array(z.object({ id: z.string().min(1), selected: z.array(z.string()),
-    custom: z.string().nullable().optional() }).strict()).min(1),
-}).strict();
+// The four wire v6 states, or "" while the Run is open.
+const terminalOutput = z.union([z.enum([...TERMINAL_STATES]), z.literal("")]);
 const statusOutput = z.object({
-  run_id: z.string().min(1), terminal: z.union([z.enum([...TERMINAL_STATES]), z.literal("")]),
-  last_seq: z.number().int().safe().min(-1), clarification: z.record(z.string(), z.json()).nullable(),
+  run_id: z.string().min(1), terminal: terminalOutput, last_seq: z.number().int().safe().min(-1),
 }).strict();
-const eventKind = z.enum([...EVENT_KINDS, ...RETIRED_EVENT_KINDS]);
 const eventOutput = z.object({
   run_id: z.string().min(1), seq: z.number().int().safe().nonnegative(),
-  kind: eventKind,
+  kind: z.enum([...EVENT_KINDS]),
   payload: z.record(z.string(), z.json()),
 }).strict();
 const memberOutput = z.object({
@@ -75,53 +59,28 @@ const projectOutput = z.object({
   workspace_id: z.string().min(1), role: z.enum(["OWNER", "EDITOR", "VIEWER"]),
   members: z.array(memberOutput),
   created_at: z.number().int().safe(), updated_at: z.number().int().safe(),
+  engine: z.enum(["v5", "v6"]).optional(),
 }).strict();
-const billableDimensionsOutput = z.object({
-  uncached_input: z.number().int().safe().nonnegative(),
-  cache_read: z.number().int().safe().nonnegative(),
-  cache_write: z.number().int().safe().nonnegative(),
-  output: z.number().int().safe().nonnegative(),
-  cache_write_class: z.string().min(1).nullable().optional(),
-  cache_write_duration_s: z.number().int().safe().nonnegative().nullable().optional(),
-  provider_tier: z.string().min(1).nullable().optional(),
-  long_context_band: z.string().min(1).nullable().optional(),
-}).strict();
-const runControlEgressOutput = z.object({
-  candidate: z.number().int().safe().nonnegative(),
-  call: z.number().int().safe().nonnegative(),
-}).strict();
-const runControlOutput = z.object({
-  id: z.string().min(1),
-  kind: z.enum(["steer", "answer_now"]),
-  sequence: z.number().int().safe().positive(),
-  state: z.enum(["queued", "claimed", "dispatched", "not_dispatched"]),
-  attempt: z.number().int().safe().nonnegative().nullable(),
-  step: z.number().int().safe().nonnegative().nullable(),
-  egress: runControlEgressOutput.nullable(),
-  text: z.string().nullable().optional(),
-}).strict();
-const admittedOutput = z.object({
-  run_id: z.string().min(1), state_hash: z.string().min(1), result_hash: z.string(),
-  requested_route_id: z.string().min(1), profile: z.string().min(1),
-  stored_wire_version: z.union(STORED_WIRE_VERSIONS.map(version => z.literal(version))),
-  terminal: z.union([z.enum([...TERMINAL_STATES]), z.literal("")]),
+// The owner's RunRecord, field for field; identity, state and events are checked, usage is the owner's object as served.
+const runOutput = z.object({
+  run_id: z.string().min(1), project_id: z.string().min(1).optional(),
+  state_hash: z.string().regex(/^[0-9a-f]{64}$/), result_hash: z.string(),
+  requested_route_id: z.string().min(1).optional(), profile: z.string().optional(),
+  stored_wire_version: z.union(STORED_WIRE_VERSIONS.map(version => z.literal(version))).optional(),
+  terminal: terminalOutput,
+  usage: z.record(z.string(), z.json()).nullable().optional(),
+  accepted_at: z.number().int().safe().optional(),
   duration_seconds: z.number().int().safe().nonnegative().nullable().optional(),
-  usage: z.object({
-    coverage: z.enum(["complete", "incomplete"]), provider_id: z.string().min(1),
-    model_id: z.string().min(1), observed_at: z.number().int().safe().nonnegative(),
-    billable_dimensions: z.array(billableDimensionsOutput).min(1),
-  }).strict(),
   events: z.array(eventOutput),
-  controls: z.array(runControlOutput),
 }).strict().refine(value => value.terminal === ""
   ? value.result_hash === "" && value.events.at(-1)?.kind !== "terminal"
-  : value.result_hash.length > 0, "Run terminal and result hash are not paired");
+  : value.result_hash.length > 0 && value.events.at(-1)?.kind === "terminal", "Run terminal and result hash are not paired");
 
 const artifactInput = z.object({
   project_id: z.string().min(1),
   cas_ref: z.string().regex(/^sha256:[0-9a-f]{64}$/).optional(),
   run_id: z.string().min(1).optional(),
-  artifact_id: z.string().min(1).optional(),
+  artifact_path: z.string().min(1).optional(),
   output: z.string().min(1).optional(),
 }).strict();
 const artifactOutput = z.object({
@@ -151,8 +110,8 @@ function success(value) {
 function failure(error, lifecycle = false) {
   const code = error instanceof CliError && /^[a-z][a-z0-9_]{0,63}$/.test(error.code)
     ? error.code : "internal_error";
-  // A38: the run door's product words naming the Produce entry it keeps off (validated by the client) ride along.
-  const message = code === "produce_unavailable" ? { message: error.message } : {};
+  // A read-only (v5) Project and a retired door carry the owner's own sentence (validated by the client).
+  const message = OWNER_WORDED.includes(code) ? { message: error.message } : {};
   const details = Object.fromEntries((lifecycle ? ["run_id", "request_key", "parent_state_hash", "pending"] : ["run_id", "pending"])
     .filter(field => error instanceof CliError && Object.hasOwn(error, field))
     .map(field => [field, typeof error[field] === "string" ? redact(error[field]) : error[field]]));
@@ -212,42 +171,38 @@ export function createVecteurMcpServer(client = new VecteurClient(), shutdownSig
 
   tool(server, "vecteur_run_submit",
     "Submit an ask and return its terminal record. Pass vecteur_material_attach's returned selections verbatim; omitting this Project's pending material refuses, also after a server restart (attach again for its selections). Set discard_pending_material=true to forget this Project's pending material and use only the supplied selections (or none). For long Runs use vecteur_run_start and poll vecteur_run_status.",
-    submitInput, admittedOutput, async ({ project_id: projectId, ask, selections, discard_pending_material, produce }, context) => {
+    submitInput, runOutput, async ({ project_id: projectId, ask, selections, discard_pending_material }, context) => {
       const progressToken = context.mcpReq._meta?.progressToken;
       const onEvent = progressToken === undefined ? null : (event) => context.mcpReq.notify({
           method: "notifications/progress",
           params: {
             progressToken,
-            progress: event.seq + 1,
+            progress: event.seq,                               // events are numbered from 1 (wire.js FIRST_EVENT_SEQ): the count delivered
             message: event.kind,
           },
         });
-      return withMaterial(projectId, selections, discard_pending_material, () => client.runSubmit(projectId, ask, onEvent, signal(context), undefined, selections,
-        produce === undefined ? undefined : { kind: "produce", ...produce }));
+      return withMaterial(projectId, selections, discard_pending_material, () => client.runSubmit(projectId, ask, onEvent, signal(context), undefined, selections));
     });
 
-  tool(server, "vecteur_run_get", "Get one Vecteur run record, including an open run.", runInput, admittedOutput,
+  tool(server, "vecteur_run_get", "Get one Vecteur run record, including an open run.", runInput, runOutput,
     ({ run_id: runId }, context) => client.runGet(runId, signal(context)));
 
   tool(server, "vecteur_run_events", "Validate run events against its direct record.", runInput,
-    admittedOutput, ({ run_id: runId }, context) => client.runEvents(runId, null, signal(context)));
+    runOutput, ({ run_id: runId }, context) => client.runEvents(runId, null, signal(context)));
 
   tool(server, "vecteur_run_start", "Admit without waiting. Pass attached material's returned selections verbatim; omitting this Project's pending material refuses, also after a server restart (attach again for its selections). Set discard_pending_material=true to forget this Project's pending material and use only the supplied selections (or none). Freeze request_key, ask and parent_state_hash (null for no head) for retries. Detaching never cancels.",
     startInput, startOutput, ({ project_id, ask, request_key, parent_state_hash, selections, discard_pending_material }, context) =>
       withMaterial(project_id, selections, discard_pending_material, () => client.runStart(project_id, ask, {
         requestKey: request_key, parentStateHash: parent_state_hash, selections, signal: signal(context),
       })), true);
-  tool(server, "vecteur_run_status", "Poll one bounded Run record; preserve its terminal and latest requested clarification verbatim.",
+  tool(server, "vecteur_run_status", "Poll one bounded Run record: its terminal state (completed, failed, cancelled, budget; empty while open) and last event sequence. A question from the agent is its answer; reply with a new ask.",
     runInput, statusOutput, ({ run_id }, context) => client.runStatus(run_id, signal(context)), true);
-  tool(server, "vecteur_clarification_answer", "Answer the requested clarification with wire answers, including multi-select and custom text. Stale or duplicate answers refuse.",
-    answerInput, ackOutput, ({ run_id, clarification_id, answers }, context) =>
-      client.clarificationAnswer(run_id, clarification_id, answers, signal(context)), true);
 
   const cwd = process.cwd();
   tool(server, "vecteur_artifact_get",
-    "Download one run artifact into the server's working folder (never outside it), verified against its sha256 CAS id. Give cas_ref, or run_id with artifact_id. Never overwrites.",
-    artifactInput, artifactOutput, ({ project_id: projectId, cas_ref: casRef, run_id: runId, artifact_id: artifactId, output }, context) =>
-      artifactToFolder(client, { projectId, casRef, runId, artifactId, output, cwd, signal: signal(context) }));
+    "Download one run artifact into the server's working folder (never outside it), verified against its sha256 CAS id. Give cas_ref, or run_id with artifact_path. Never overwrites.",
+    artifactInput, artifactOutput, ({ project_id: projectId, cas_ref: casRef, run_id: runId, artifact_path: artifactPath, output }, context) =>
+      artifactToFolder(client, { projectId, casRef, runId, artifactPath, output, cwd, signal: signal(context) }));
 
   tool(server, "vecteur_material_attach",
     `Upload one local file to ${client.config.origin}. Pass the returned selections verbatim to vecteur_run_submit or vecteur_run_start for this Project; upload alone is not Run admission. Requires confirm_origin equal to that origin and expected_state_hash equal to the current head (null if none).`,

@@ -1,12 +1,12 @@
 import { withAdmissionLock } from "./localfiles.js";
 import { CliError } from "./errors.js";
-import { runView, runBlocks, blockText } from "./blocks.js";
+import { runBlocks, blockText } from "./blocks.js";
 import { openBrowser } from "./browser.js";
 import { diagnose } from "./diagnostics.js";
 import { humanCost, terminalText } from "./format.js";
 import { preferences, savePreferences } from "./preferences.js";
 
-export const SHORTCUTS = `Enter sends when ready; while running it offers steering or keeps the draft.
+export const SHORTCUTS = `Enter sends when ready; while a Run is working it keeps the draft.
 Alt+Enter / Ctrl+J newline; backslash then Enter is the portable fallback.
 Bracketed paste never sends. Plain/dumb multiline chunks stay drafts; a split-read
 lone CR/CRLF is indistinguishable from Enter and can send.
@@ -30,13 +30,12 @@ add("offline", "Draft without any network activity", s => {
   if (s.busy && !s.loginController) throw new CliError("session_busy", "Wait for this action to finish before disconnecting; your draft is kept");
   s.workOffline();
 });
-add("exec", "Allow local bash commands, or revoke immediately", (s, argument) => s.execConsent(argument), { argument: "on|off", requires: "login" });
 add("resume", "Reconnect or reconcile an interrupted ask", s => s.resume());
 add("quit", "Save draft and detach; cloud Run continues", s => s.close(), { aliases: ["exit"] });
 add("drafts", "Recover a saved draft", s => s.recoverDraft());
 add("clear", "Clear this draft; Ctrl+_ restores the edit", s => { s.lastClearedDraft = s.draft; s.setDraft(""); });
-add("mode", "Lead, model, execution location and payer", s => s.message(s.modeDetails()));
-add("model", "Choose the next Run's server model or route", s => s.modelChoice(), { requires: "login" });
+add("mode", "Model, execution location and payer", s => s.message(s.modeDetails()));
+add("model", "Choose the next Run's model", s => s.modelChoice(), { requires: "login" });
 add("usage", "Read the Project's server-authored usage", async s => {
   if (!s.project) throw new CliError("project_unavailable", "Choose a Project first with /project");
   const client = s.client, project = s.project;
@@ -108,48 +107,13 @@ add("download", "Save and verify a result file", (s, argument) => {
   if (!match) throw new CliError("usage_invalid", "Use /download <artifact number> [output path]");
   return s.download(Number(match[1]), match[2]);
 }, { argument: "<number> [path]", required: true, requires: "login" });
-add("package", "Save a result file into its own folder to test locally; then /attach the report", (s, argument) => {
-  if (!/^\d+$/.test(argument.trim())) throw new CliError("usage_invalid", "Use /package <artifact number>");
-  return s.package(Number(argument));
-}, { argument: "<number>", required: true, requires: "login" });
-add("run-package", "Run a /package folder's declared tests here, with your consent; stage the report for upload", (s, folder) =>
-  s.runPackage(folder), { argument: "[folder]", requires: "login" });
-add("stop-package", "Stop the running package and every process it started", s => s.stopPackage());
-add("produce", "Ask one specialist (business, knowledge) to produce; a knowledge document needs a completed analysis in this Project first; Engineering adopts its result", (s, argument) =>
-  s.produce(argument), { argument: "<specialist> [entry] [profile=<nasa|esa>] <ask>", required: true, requires: "login" });
 add("export", "Export the answer, Run record and verified files to a new folder", (s, path) => s.exportRun(path || undefined), { argument: "[folder]", requires: "login" });
 add("copy", "Copy the exact answer or save it to a new file", (s, path) => s.copy(path || undefined), { argument: "[path]" });
-add("answer", "Answer the current clarification", s => s.answer(), { requires: "question" });
-add("steer", "Send an instruction to the running Run", (s, text) => s.steer(text), { argument: "<instruction>", required: true, requires: "run" });
-add("answer-now", "Ask the running Run to conclude", s => s.steer(""), { requires: "run" });
 add("cancel", "Request cancellation; keep completed work", s => s.cancel(), { requires: "run" });
-add("details", "Read the current or numbered block in full", async (s, argument) => {
+add("details", "Read the current or numbered block in full", (s, argument) => {
   const blocks = runBlocks(s.run);
-  const block = argument ? blocks[Number(argument) - 1] : [...blocks].reverse().find(b => b.calls) ?? blocks.at(-1);
-  if (!block) { s.message("No block details yet."); return; }
-  const lines = [blockText(block, { full: true })];
-  for (const { call, result } of block.calls ?? []) {
-    if (!result?.stdout_ref) continue;
-    const ref = result.stdout_ref, chunks = [];
-    let size = 0;
-    try {
-      s.requireLogin();
-      if (!s.project?.id) throw new CliError("project_required", "Select the Run's Project first");
-      const metadata = await s.client.artifactGet(ref, s.project.id, chunk => {
-        size += chunk.byteLength;
-        if (size > 64 * 1024) throw new CliError("stdout_too_large", "Full stdout exceeds the 64 KiB CLI detail limit");
-        chunks.push(Buffer.from(chunk));
-      }, s.lifecycle.signal);
-      if (!metadata.content_type.startsWith("text/") && !["application/json", "image/svg+xml"].includes(metadata.content_type)) {
-        throw new CliError("stdout_invalid", "Full stdout is not a textual media type");
-      }
-      lines.push(`Full stdout · ${call.call_id} · ${ref}:\n${Buffer.concat(chunks).toString("utf8") || "(empty)"}`);
-    } catch (error) {
-      lines.push(`Full stdout unavailable · ${ref}: ${error.message}`);
-      if (error.code === "stdout_too_large") lines.push(`Save full stdout: vecteur artifact get ${ref} -p ${s.project.id} --output <file>`);
-    }
-  }
-  s.message(terminalText(lines.join("\n")));
+  const block = argument ? blocks[Number(argument) - 1] : blocks.findLast(b => b.kind === "tool") ?? blocks.at(-1);
+  s.message(block ? terminalText(blockText(block, { full: true })) : "No block details yet.");
 }, { argument: "[number]" });
 add("handoff", "Open your Claude Code or Codex here with Vecteur attached", (s, vendor) => {
   if (!["claude", "codex"].includes(vendor)) throw new CliError("usage_invalid", "Use /handoff claude or /handoff codex");
@@ -172,7 +136,6 @@ export function unavailable(row, session) {
   if (!session.account) return "Sign in — /login";
   if (row.requires === "login") return "";
   if (session.project?.role === "VIEWER") return "Read-only Project";
-  if (row.requires === "question") return runView(session.run).question ? "" : "No pending question";
   return session.run?.open ? "" : "No running Run";
 }
 export function completions(query = "", session) {

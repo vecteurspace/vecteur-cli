@@ -4,8 +4,9 @@ import { basename, dirname, extname, join, resolve, sep } from "node:path";
 
 import { CliError } from "./errors.js";
 import { downloadArtifact } from "./download.js";
+import { runArtifacts } from "./blocks.js";
 
-// A22(d): the run door's material cap (backend asgi.MAX_MATERIAL_BYTES, OPE MAX_INPUT_BYTES): one figure everywhere.
+// The run door's material cap (backend asgi.MAX_MATERIAL_BYTES): one figure everywhere.
 export const MAX_MATERIAL_BYTES = 16 * 1024 * 1024;
 export const MEDIA = { ".txt": "text/plain", ".md": "text/markdown", ".csv": "text/csv", ".json": "application/json",
   ...Object.fromEntries(['.py', '.m', '.jl', '.r', '.c', '.h', '.cpp', '.f90', '.toml', '.yaml', '.yml', '.ini', '.cfg', '.tex', '.rst'].map(ext => [ext, 'text/plain'])),
@@ -25,13 +26,13 @@ async function contained(cwd, name, { leaf }) {
 }
 
 /** Digest-verified artifact download (the `vecteur run export` verifier) into the working folder. */
-export async function artifactToFolder(client, { projectId, casRef, runId, artifactId, output, cwd, signal }) {
+export async function artifactToFolder(client, { projectId, casRef, runId, artifactPath, output, cwd, signal }) {
   if (!casRef) {
-    if (!runId || !artifactId) throw new CliError("usage_invalid", "Give cas_ref, or run_id with artifact_id");
+    if (!runId || !artifactPath) throw new CliError("usage_invalid", "Give cas_ref, or run_id with artifact_path");
     const run = await client.runGet(runId, signal);
-    const found = run.events.find(event => event.kind === "artifact" && event.payload?.id === artifactId);
+    const found = runArtifacts(run.events).find(artifact => artifact.path === artifactPath);
     if (!found) throw new CliError("artifact_unavailable", "Run has no such artifact");
-    casRef = found.payload.cas_ref;
+    casRef = found.cas_ref;
   }
   const target = await contained(cwd, output ?? `artifact-${String(casRef).slice(7, 19)}`, { leaf: true });
   const result = await downloadArtifact(client, casRef, projectId, target);

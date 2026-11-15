@@ -2,7 +2,7 @@ import stringWidth from "string-width";
 import wrapAnsi from "wrap-ansi";
 import { parseMarkdown } from "../markdown.js";
 import { blockContent } from "../blocks.js";
-import { terminalText, plainLine, taskLines } from "../format.js";
+import { terminalText, plainLine } from "../format.js";
 
 // Unknown palette: the terminal owns its readable default pair. Only repeated metadata is faint.
 export const DEFAULT_THEME = Object.freeze({ primary: "", accent: "1", attention: "1", success: "1", error: "1",
@@ -178,9 +178,11 @@ export function markdownView(source, width, color = true) {
     } else if (block.kind === "hr") {
       lines.push(paint("─".repeat(Math.min(width, 48)), "rule", theme));
     } else if (block.kind === "list") {
-      block.items.forEach((item, index) => {
-        const prefix = block.ordered ? `${index + 1}. ` : "• ";
-        prose(inline(item, theme), measureWidth - prefix.length).forEach((line, i) => lines.push((i ? " ".repeat(prefix.length) : paint(prefix, "quiet", theme)) + line));
+      const count = [0, 0];                       // the web grammar's items: one level of nesting, numbered per level
+      block.items.forEach(item => {
+        count[item.depth] += 1; if (!item.depth) count[1] = 0;
+        const prefix = "  ".repeat(item.depth) + (item.ordered ? `${count[item.depth]}. ` : "• ");
+        prose(inline(item.inline, theme), measureWidth - prefix.length).forEach((line, i) => lines.push((i ? " ".repeat(prefix.length) : paint(prefix, "quiet", theme)) + line));
       });
     } else {
       let value = inline(block.inline, theme);
@@ -254,7 +256,7 @@ function trimStart(value, max) {
 }
 
 const execution = view => view.location && view.location !== "Vecteur cloud" ? view.location : "Cloud";
-const routeOf = view => `${view.lead ? `${view.lead} · ` : ""}${view.model} · ${execution(view)}`;
+const routeOf = view => `${view.model} · ${execution(view)}`;
 const customOrigin = view => view.origin && view.origin !== "https://vecteur.space" ? view.origin : "";
 
 /**
@@ -295,7 +297,7 @@ export function richLayout(view, composer, cursor, options = {}) {
   const theme = themeOf(color);
   const width = Math.max(20, columns - 1), budget = Math.max(1, rows - 3);
   const active = !!view.run?.subject && !view.run.terminal;
-  const pending = view.run?.blocks?.find(block => !block.committed && block.calls);
+  const pending = view.run?.blocks?.find(block => !block.committed && block.kind === "tool");
   const pendingContent = pending ? blockContent(pending) : null;
   // Compact layouts reserve their activity row for the open call, including its state.
   const callSummary = pendingContent ? `${pendingContent.tool}  ${trimEnd(plainLine(pendingContent.title),
@@ -304,7 +306,7 @@ export function richLayout(view, composer, cursor, options = {}) {
   const glyph = tick === null ? "●" : SPINNER[tick % SPINNER.length];
   const runHint = readOnly ? "Read-only · /help · Ctrl+D detach"
     : signedOut ? `${view.offline ? "/resume" : "/login"} · /help · Ctrl+D detach`
-      : `${view.run?.question ? "/answer" : "/steer · /answer-now"} · /help${width < 60 ? "\n" : " · "}Esc twice cancel · Ctrl+D detach`;
+      : `/help${width < 60 ? "\n" : " · "}Esc twice cancel · Ctrl+D detach`;
   const idleHint = `${readOnly ? "Read-only · /project" : signedOut ? "Enter sign in" : view.busy ? "Please wait" : "Enter send"} · / commands · ? shortcuts`;
   if (rows < 12) {
     const focus = view.focus ?? view.prompt;
@@ -361,27 +363,16 @@ export function richLayout(view, composer, cursor, options = {}) {
   // Activity: the one animated glyph, the current step and the server-anchored clock.
   if (active && !compactFocus) {
     const clock = view.run.elapsed ?? "Elapsed unavailable";
-    const doing = compactRun ? callSummary ?? view.status : (view.run.progress || "Working").replace(/^Starting: (.+)$/, "$1").replace(/[.…]+$/, "") + "…";
+    const doing = compactRun ? callSummary ?? view.status : (view.run.progress || "Working").replace(/[.…]+$/, "") + "…";
     const head = `${paint(glyph, "accent", theme)} ${paint(terminalText(doing), "primary", theme)}`, tail = paint(terminalText(clock), "quiet", theme);
     if (measure(`${glyph} ${terminalText(doing)} · ${terminalText(clock)}`) <= width) lines.push(`${head} ${paint("·", "quiet", theme)} ${tail}`);
     else if (compactRun) lines.push(callSummary ? paint(terminalText(doing), "attention", theme) : wrap(head, width)[0], `  ${tail}`);
     else lines.push(wrap(`${paint(glyph, "accent", theme)} ${tail} · ${paint(terminalText(doing), "primary", theme)}`, width)[0]);
     if (!compactRun && view.status && view.status !== "Running") line(`  ${view.status}`, "secondary", 1);
   }
-  if (active && !compactFocus && !compactRun) {
-    const pending = view.run.blocks?.find(block => !block.committed && block.calls);
-    if (pending) {
-      const content = blockContent(pending);
-      line(`  ${content.tool}  ${content.title} · ${content.status}`, "attention", 1);
-      if (pending.kind === "sources") line(`  ${content.rows.join(" · ")}`, "secondary", 1);
-    }
-    for (const block of view.run.blocks?.filter(block => block.kind === "control") ?? []) {
-      const c = blockContent(block);
-      line(`  ${c.title} · ${c.rows.join(" · ")}`, "secondary", 1);
-    }
+  if (active && !compactFocus && !compactRun && pendingContent) {
+    line(`  ${pendingContent.tool}  ${pendingContent.title} · ${pendingContent.status}`, "attention", 1);
   }
-  if (!compactFocus && !compactRun && view.run?.question) line(readOnly ? "Waiting for an editor to answer"
-    : signedOut ? "Question pending — reconnect to answer" : "Your answer is needed · /answer", "attention", 1);
   if (prompt) {
     line(prompt.title, "strong", compactFocus ? 1 : 3);
     if (!prompt.typed) {
@@ -428,7 +419,7 @@ export function richLayout(view, composer, cursor, options = {}) {
   const placeholder = prompt ? (prompt.typed ? "Type your answer…" : "Filter or type a choice number…")
     : readOnly ? "Read-only Project — draft here…" : view.offline ? "Draft offline…"
       : !view.account ? "Sign in to send — draft here…"
-        : active ? "Draft your next question…" : "Ask Laplace…";
+        : active ? "Draft your next question…" : "Ask Vecteur…";
   lines.push(...composerBand(draft.lines.map((value, index) => ` ${index ? " " : paint("›", "accent", theme)} ${composer ? paint(value, "primary", theme)
     : paint("▌", "accent", theme) + paint(placeholder, "secondary", theme)}`), width, theme,
   { top: selection, bottom: draft.scrolling ? draft.position : "" }));
@@ -446,7 +437,7 @@ export function richLayout(view, composer, cursor, options = {}) {
   }
   if (firstUse) {
     const note = "New folder · A project will be created on your first message. /link existing";
-    const intro = [paint("What are we working on?", "strong", theme), paint("Ask Laplace about your mission, or start from a file.", "secondary", theme)];
+    const intro = [paint("What are we working on?", "strong", theme), paint("Ask about your mission, or start from a file.", "secondary", theme)];
     const suggestions = ONBOARDING.map(text => `${paint("›", "accent", theme)} ${paint(text, "secondary", theme)}`);
     const quiet = wrap(note, width).map(row => paint(row, "quiet", theme));
     const body = [[...intro, "", ...suggestions, "", ...quiet], [...intro, "", ...quiet], quiet]
@@ -466,7 +457,7 @@ export function richFrame(view, composer, cursor, options = {}) {
 const indent = (text, first, rest = "  ") => text.split("\n").map((line, i) => (i ? (line ? rest : "") : first) + line).join("\n");
 
 /** One scrollback block per message: the ask, the answer with its record, or a quiet notice. */
-export function richMessage(message, columns, color, { stepsShown = false, shownKeys = new Set() } = {}) {
+export function richMessage(message, columns, color, { shownKeys = new Set() } = {}) {
   const theme = themeOf(color), width = Math.max(20, columns - 1);
   if (message.kind === "user") {
     const rows = wrap(terminalText(message.text), width - 2).map((row, index) =>
@@ -478,34 +469,20 @@ export function richMessage(message, columns, color, { stepsShown = false, shown
   if (message.kind !== "answer") return wrap(terminalText(message.text), width - 2).map(line => "  " + line).join("\n");
   const run = message.sections;
   if (!run) return "\n" + indent(markdownView(message.text, width - 2, theme), paint("●", "accent", theme) + " ") + "\n";
+  // The turn: its working trace (rows not already printed live), the answer, the files, the terminal state, the stop card.
   const out = [];
-  // A horizon stop says so, and what can be done, before the work (the plain renderer's `humanRun` prints the same lines).
-  if (run.stop?.length) out.push(...run.stop.flatMap(line => (line ? prose(terminalText(line), width - 4).map(part => "  " + paint(part, "attention", theme)) : [""])), "");
-  for (const block of run.blocks ?? []) {
-    if (!shownKeys.has(block.key) && ["tool", "sources", "clarification"].includes(block.kind))
-      out.push(richBlock(block, columns, theme), "");
+  for (const block of run.blocks) {
+    if (block.kind !== "terminal" && !shownKeys.has(block.key)) out.push(richBlock(block, columns, theme));
   }
-  out.push(run.answer !== undefined ? indent(markdownView(run.answer, width - 2, theme), paint("●", "accent", theme) + " ")
+  if (out.length) out.push("");
+  out.push(run.answer ? indent(markdownView(run.answer, width - 2, theme), paint("●", "accent", theme) + " ")
     : paint("●", "attention", theme) + " No answer was published for this Run.");
-  // The host's publication warnings, beside a non-empty answer, as the plain renderer and the browser show them (`format.js` publicationChecks).
-  if (run.answer !== undefined && run.answer !== "" && run.checks?.length)
-    out.push("", ...run.checks.flatMap(check => prose(terminalText(check), width - 4).map(part => "  " + paint(part, "attention", theme))));
-  const section = (title, rows) => { if (rows.length) out.push("", "  " + paint(title, "strong", theme), ...rows); };
-  const one = text => text.split("\n").map(part => part.trim()).filter(Boolean).join(" · ");
-  const shownSteps = new Set((run.blocks ?? []).filter(block => block.kind === "step" && shownKeys.has(block.key)).map(block => block.stepId));
-  const tasks = shownSteps.size && run.events ? taskLines(run.events.filter(event => event.kind !== "step_finished" || !shownSteps.has(event.payload?.step_id)), { facts: true }) : run.tasks;
-  section("Steps", tasks.slice(stepsShown).flatMap(task => prose(terminalText(one(task.replace(/^\s*[▸·]\s*/, ""))), width - 4).map(row => `  ⎿ ${paint(row, "secondary", theme)}`)));
-  // Evidence rows are never truncated: quantity, unit and origin wrap with a hanging indent.
   const full = (row, role = "secondary") => prose(terminalText(row.trim()), width - 4).map((part, i) => (i ? "    " : "  ") + paint(part, role, theme));
-  section("Inputs and origins", run.origins.flatMap(row => full(row)));
-  section("Assumptions", run.assumptions.flatMap(row => full(row)));
-  section("Transfer tables", run.tables.flatMap(rows => rows.flatMap(row => full(row))));
-  section("Files", run.artifacts.flatMap(({ artifact, number, sameBytesAs }, i) =>
-    prose(`${terminalText(artifact.path ?? artifact.filename)} · ${terminalText(artifact.kind)} · /download ${number ?? i + 1}${sameBytesAs ? ` · same bytes as ${sameBytesAs}` : ""}`, width - 4)
+  if (run.artifacts.length) out.push("", "  " + paint("Files", "strong", theme), ...run.artifacts.flatMap(({ artifact, number, sameBytesAs }) =>
+    prose(`${terminalText(artifact.path)} · ${terminalText(artifact.kind)} · ${artifact.bytes} B · /download ${number}${sameBytesAs ? ` · same bytes as ${sameBytesAs}` : ""}`, width - 4)
       .map((part, index) => `  ${index ? " " : paint("↓", "accent", theme)} ${paint(part, "secondary", theme)}`)));
-  out.push("", ...full(run.tail.map(terminalText).join(" · "), run.state === "ok" ? "quiet" : "attention"));
-  section("Controls", (run.blocks ?? []).filter(block => block.kind === "control" && !shownKeys.has(block.key))
-    .map(block => richBlock(block, columns, theme)));
+  out.push("", ...full(run.tail.map(terminalText).join(" · "), run.state === "completed" ? "quiet" : "attention"));
+  if (run.stop.length) out.push("", ...run.stop.flatMap(line => prose(terminalText(line), width - 4).map(part => "  " + paint(part, "attention", theme))));
   return "\n" + out.join("\n") + "\n";
 }
 
@@ -514,24 +491,10 @@ export function richMessage(message, columns, color, { stepsShown = false, shown
 export function richBlock(block, columns = 80, color = true, { full = false } = {}) {
   const theme = themeOf(color), width = Math.max(20, columns - 1);
   const c = blockContent(block, { full });
-  const role = block.kind === "step"
-    ? ["computed", "read"].includes(c.status) ? "success" : ["failed", "refused"].includes(c.status) ? "error" : "attention"
-    : c.status === "ok" ? "success" : ["running", "requested", "queued", "claimed"].includes(c.status) ? "attention" : "error";
+  const role = ["ok", "completed"].includes(c.status) ? "success" : c.status === "running" ? "attention" : "error";
   const header = `${paint("●", role, theme)} ${paint(terminalText(c.tool ?? c.title), "strong", theme)}${c.tool ? `  ${paint(terminalText(c.title), "primary", theme)}` : ""}`;
   const out = wrap(header, width);
   for (const row of c.rows) out.push(...wrap(terminalText(row).trim(), width - 5).map((line, i) =>
     `${i ? "     " : "  ⎿  "}${paint(line, "secondary", theme)}`));
-  const preview = c.preview ?? [];
-  // Preserve the selected logical lines in scrollback, even at narrow widths.
-  // Bound each line independently so a long notice cannot displace the cause.
-  const selected = c.previewTail ? preview.slice(-3) : preview.slice(0, 3);
-  const wrapped = selected.map(row => wrap(row, width - 5));
-  const display = wrapped.flatMap(rows => rows.slice(0, 3));
-  if (display.length) {
-    out.push(...display.map(row => "     " + paint(row, "secondary", theme)));
-    const truncated = preview.length > 3 || wrapped.some(rows => rows.length > 3);
-    const label = truncated ? "… output excerpt truncated · ctrl+o for the full block" : "output excerpt · ctrl+o for the full block";
-    out.push(...wrap(label, width - 5).map(row => "     " + paint(row, "secondary", theme)));
-  }
   return out.join("\n");
 }

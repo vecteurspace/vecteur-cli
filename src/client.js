@@ -4,19 +4,19 @@ import { closeSync, fsyncSync, linkSync, openSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import {
-  ARTIFACT_MEDIA_TYPES, EVENT_KINDS, OWNER_CONTRACT_IDENTITY, RETIRED_EVENT_KINDS, validateAdmitted,
-  validateCliRelease, validateCustomerCostProjection, validateDeviceAuthorization, validateLimitDenial,
-  validatePatCreated, validateProject, validateRunAck, validateAccount, validateQuotaDenial,
-  RECOVERY_ACTIONS, validateRunStopOffer, validateRunControl, validateSource, validateSourceOffer,
-  AGENT_LABELS, CHILD_WIRE_VERSIONS, SPECIALIST_TOOL_WIRE_VERSION, LOCAL_EXEC_WIRE_VERSION, STORED_WIRE_VERSIONS, WIRE_READER_HEADER, WIRE_READER_VERSION, WIRE_VERSION_UNSUPPORTED,
+  ARTIFACT_MEDIA_TYPES, OWNER_CONTRACT_IDENTITY, RECOVERY_ACTIONS, STORED_WIRE_VERSIONS, STORED_WIRE_VERSION_HEADER,
+  WIRE_READER_HEADER, WIRE_READER_VERSION, validateAccount, validateCliRelease, validateCustomerCostProjection,
+  validateDeviceAuthorization, validateLimitDenial, validatePatCreated, validateProject, validateQuotaDenial,
+  validateRunAck, validateRunStopOffer, validateSource, validateSourceOffer,
 } from "./contract.js";
+import { FIRST_EVENT_SEQ, isStateHash, validateEvent, validateRun } from "./wire.js";
 import { credentialsPath, readCredentials } from "./credentials.js";
 import { readStore, writeStore } from "./store.js";
 import { CliError } from "./errors.js";
-import { canonicalJson, capabilityCall } from "./format.js";
+import { canonicalJson } from "./format.js";
 
 // Re-exported so every existing importer keeps its one import site; `errors.js` owns the type.
-export { CliError };
+export { CliError, isStateHash, validateEvent };
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 export const DEFAULT_ORIGIN = "https://vecteur.space";
@@ -27,28 +27,11 @@ const RESPONSE_ACTIVITY = Symbol("response-activity");
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_FRAME_BYTES = 1024 * 1024;
 const MAX_EVENTS = 10_000;
+/** Refusals that are final for a submission (nothing was admitted, nothing will be) and carry the owner's sentence. */
+export const OWNER_WORDED = Object.freeze(["not_supported", "project_read_only"]);
 const CAS_REF_SHAPE = /^sha256:([0-9a-f]{64})$/;
-const STATE_HASH_SHAPE = /^[0-9a-f]{64}$/;
-
-
-/** The one shape of a design head, so `--parent` and the head read cannot disagree. */
-export function isStateHash(value) {
-  return typeof value === "string" && STATE_HASH_SHAPE.test(value);
-}
 
 export const isRequestKey = value => typeof value === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(value);
-
-export function validateAnswers(answers) {
-  if (!Array.isArray(answers) || !answers.length || !answers.every(answer =>
-    answer && typeof answer === "object" && !Array.isArray(answer)
-    && Object.keys(answer).every(key => ["id", "selected", "custom"].includes(key))
-    && typeof answer.id === "string" && answer.id.length > 0
-    && Array.isArray(answer.selected) && answer.selected.every(item => typeof item === "string")
-    && (answer.custom === undefined || answer.custom === null || typeof answer.custom === "string"))) {
-    throw new CliError("answers_invalid", "Expected an array of {id, selected: string[], custom?: string|null}");
-  }
-  return answers;
-}
 
 /**
  * A failure after the acknowledgement names the admitted Run, which may still be running:
@@ -206,111 +189,9 @@ export async function waitForDeviceAuthorization(client, grant, { sleep = delay,
   }
 }
 
-function exactObject(value, fields, code) {
-  if (!value || typeof value !== "object" || Array.isArray(value) ||
-      Object.keys(value).sort().join("\n") !== [...fields].sort().join("\n")) {
-    throw new CliError(code, "Server returned malformed owner data");
-  }
-  return value;
-}
-
-const CHILD_AGENTS = Object.keys(AGENT_LABELS).filter(agent => agent !== "engineering");
-const STORED_WIRE_VERSION_HEADER = "X-Vecteur-Stored-Wire-Version";
-
-/**
- * RunWire v3 (v5 spec §4.1): a child row names its agent and the main row that delegated it,
- * and exists only on a record the owner served at version 3 -- read from the record, never
- * guessed from the rows. OPE owns the full nesting law; this reader refuses what it cannot
- * render honestly: an unknown agent, a parent it never saw, or a child row on a v1/v2 record.
- */
-export function validateChildRows(events, storedVersion) {
-  const check = rowGuard(storedVersion);
-  events.forEach(check);
-  return events;
-}
-
-/**
- * The same law, one event at a time: the streaming path runs it BEFORE it forwards a live event, and a reconnect
- * seeds it with the events already received so the row context survives. A v5x `capability_tool` call must name
- * an existing ROOT row and carry a closed family, an identifier and no child metadata at all.
- */
-export function rowGuard(storedVersion) {
-  if (!STORED_WIRE_VERSIONS.includes(storedVersion)) {
-    throw new CliError("run_invalid", "Server returned an unknown stored RunWire version");
-  }
-  const opened = new Map();
-  return (event) => {
-    if (event.kind === "tool_call" && event.payload?.tool === "local_exec" && storedVersion < LOCAL_EXEC_WIRE_VERSION) throw new CliError("run_invalid", "Local command requires RunWire v5");
-    if (event.kind === "tool_call" && event.payload?.tool === "capability_tool") {
-      const payload = event.payload;
-      if (!capabilityCall(payload) || ["agent", "parent_step_id", "specialist_tool"].some(key => Object.hasOwn(payload, key))
-          || opened.get(payload.step_id) !== null) {
-        throw new CliError("run_invalid", "Server returned a malformed capability call");
-      }
-      return;
-    }
-    if (event.kind === "tool_call" && event.payload?.tool === "specialist_tool") {
-      // RunWire v4 (A8): a specialist family call, only on a v4 record, under an open row of its own agent.
-      const { agent, step_id: stepId, specialist_tool: tool } = event.payload;
-      if (storedVersion < SPECIALIST_TOOL_WIRE_VERSION || !CHILD_AGENTS.includes(agent)
-          || opened.get(stepId) !== agent || typeof tool !== "string" || !tool) {
-        throw new CliError("run_invalid", "Server returned a malformed specialist call");
-      }
-      return;
-    }
-    if (event.kind !== "step_started" && event.kind !== "step_finished") return;
-    const { agent, parent_step_id: parent, step_id: stepId } = event.payload;
-    const child = agent !== undefined || parent !== undefined;
-    if (!child) {
-      if (event.kind === "step_started" && !opened.has(stepId)) opened.set(stepId, null);
-      return;
-    }
-    if (!CHILD_WIRE_VERSIONS.includes(storedVersion) || !CHILD_AGENTS.includes(agent) || typeof parent !== "string"
-        || opened.get(parent) !== null || (event.kind === "step_started" && opened.has(stepId))) {
-      throw new CliError("run_invalid", "Server returned a malformed child row");
-    }
-    if (event.kind === "step_started") opened.set(stepId, agent);
-  };
-}
-
-export function validateEvent(value, runId, expectedSeq) {
-  exactObject(value, ["run_id", "seq", "kind", "payload"], "event_invalid");
-  if (value.run_id !== runId || !Number.isInteger(value.seq) || value.seq !== expectedSeq ||
-      !(EVENT_KINDS.includes(value.kind) || RETIRED_EVENT_KINDS.includes(value.kind)) ||
-      !value.payload || typeof value.payload !== "object" ||
-      Array.isArray(value.payload)) {
-    throw new CliError("event_sequence_invalid", `Expected event sequence ${expectedSeq}`);
-  }
-  if (value.payload.evidence_dag !== undefined) {
-    validateEvidenceDag(value.payload.evidence_dag, runId);
-  }
-  return value;
-}
-
-function evidenceReplayInvalid(message) {
-  throw new CliError("evidence_replay_invalid", `EvidenceDAG ${message}`);
-}
-
 function exactKeys(value, keys) {
   return value && typeof value === "object" && !Array.isArray(value)
     && Object.keys(value).sort().join("\n") === [...keys].sort().join("\n");
-}
-
-export function validateEvidenceDag(value, runId) {
-  if (!exactKeys(value, ["id", "schema_version", "run_id", "nodes", "edges"])) {
-    evidenceReplayInvalid("shape is invalid");
-  }
-  if (value.schema_version !== "evidence-dag.v1" || value.run_id !== runId ||
-      typeof value.id !== "string" || !value.id || !Array.isArray(value.nodes) ||
-      !Array.isArray(value.edges)) {
-    evidenceReplayInvalid("identity or arrays are invalid");
-  }
-  const digest = createHash("sha256").update(canonicalJson({
-    schema_version: value.schema_version, run_id: value.run_id,
-    nodes: value.nodes, edges: value.edges,
-  }).trimEnd(), "utf8").digest("hex");
-  if (value.id !== `evidence-dag:sha256:${digest}`) evidenceReplayInvalid("id seal is invalid");
-  return value;
 }
 
 /**
@@ -339,8 +220,8 @@ export function submissionMaterial(selections) {
   return { attachments: sorted.map(s => ({ ...s.source_handle })), selections: sorted };
 }
 
-export async function parseSse(response, runId, onEvent = null, startSeq = 0, guard = null) {
-  if (!Number.isSafeInteger(startSeq) || startSeq < 0 || startSeq >= MAX_EVENTS) {
+export async function parseSse(response, runId, onEvent = null, startSeq = FIRST_EVENT_SEQ) {
+  if (!Number.isSafeInteger(startSeq) || startSeq < FIRST_EVENT_SEQ || startSeq >= FIRST_EVENT_SEQ + MAX_EVENTS) {
     throw new CliError("cursor_invalid", "Event cursor is outside the supported history bound");
   }
   if (!response.body) throw new CliError("sse_invalid", "Event response has no body");
@@ -395,9 +276,8 @@ export async function parseSse(response, runId, onEvent = null, startSeq = 0, gu
           throw new CliError("sse_invalid", "SSE metadata disagrees with event data");
         }
         events.push(validateEvent(refuseSecretValue(value), runId, startSeq + events.length));
-        guard?.(events.at(-1));
         await onEvent?.(events.at(-1));
-        if (startSeq + events.length > MAX_EVENTS) throw new CliError("response_too_large", "Event count exceeds limit");
+        if (events.length + startSeq - FIRST_EVENT_SEQ > MAX_EVENTS) throw new CliError("response_too_large", "Event count exceeds limit");
         terminalSeen = events.at(-1).kind === "terminal";
       }
       if (Buffer.byteLength(buffer, "utf8") > MAX_FRAME_BYTES) {
@@ -465,8 +345,7 @@ export class VecteurClient {
           ...(accept ? { Accept: accept } : {}),
           ...(acceptEncoding ? { "Accept-Encoding": acceptEncoding } : {}),
           ...(lastEventId === undefined ? {} : { "Last-Event-ID": String(lastEventId) }),
-          // RunWire v3 (v5 §4.1): this reader reads every declared stored version; without the
-          // header the origin treats a client as a v2 reader and refuses a child-enabled Run.
+          // This reader advertises the highest stored wire version the owner declares.
           ...(!anonymousReadiness ? { [WIRE_READER_HEADER]: String(WIRE_READER_VERSION) } : {}),
         },
         body: rawBody ?? (body === undefined ? undefined : JSON.stringify(body)),
@@ -533,8 +412,8 @@ export class VecteurClient {
               const reset = new Date(limit.reset_at * 1000).toISOString().replace(".000Z", "Z");
               ownerMessage = `Customer cost limit reached; binding=${binding}; reset=${reset} UTC; next=${limit.recovery.join(",")}`;
             }
-            if (candidate === WIRE_VERSION_UNSUPPORTED) {
-              ownerMessage = "this Run is stored in a RunWire version this CLI cannot read; next: vecteur update";
+            if (candidate === "wire_version_unsupported") {
+              ownerMessage = "this Run is stored in a wire version this CLI cannot read; next: vecteur update";
             }
             if (["pat_expired", "pat_invalid", "pat_revoked"].includes(candidate)) {
               ownerMessage = "credential is expired or revoked; next: vecteur login";
@@ -542,8 +421,8 @@ export class VecteurClient {
             if (candidate === "pat_ancestry_inactive") {
               ownerMessage = "seat or Organization is inactive; next: contact your Organization owner or Vecteur support";
             }
-            // A38: the run door names the Produce entry it keeps off, in product words; the CLI holds no copy of the table.
-            if (candidate === "produce_unavailable" && typeof error.message === "string" && error.message.length > 0
+            // The owner's own sentence for a door this product no longer has and for a read-only (v5) Project.
+            if (OWNER_WORDED.includes(candidate) && typeof error.message === "string" && error.message.length > 0
                 && error.message.length <= 512 && !/[\r\n\0]/.test(error.message)) {
               ownerMessage = error.message;
             }
@@ -665,35 +544,6 @@ export class VecteurClient {
     return value;
   }
 
-  async runControl(runId, control, signal = undefined) {
-    const value = await this.#json("POST", `/api/runs/${encodeURIComponent(runId)}/controls`, { body: control, signal });
-    if (!validateRunControl(value) || value.id !== control.id) throw new CliError("control_invalid", "Malformed control acknowledgement");
-    return value;
-  }
-
-  async localExec(runId, body, requestId = null) {
-    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 2500);
-    try { return await this.#json("POST", `/api/runs/${encodeURIComponent(runId)}/local-exec${requestId ? '/'+encodeURIComponent(requestId) : ''}`, { body, signal: controller.signal }); }
-    finally { clearTimeout(timer); }
-  }
-
-  async runControls(runId, signal = undefined) {
-    const value = await this.#json("GET", `/api/runs/${encodeURIComponent(runId)}/controls`, { signal });
-    if (!exactKeys(value, ["controls"]) || !Array.isArray(value.controls) || value.controls.length > 32
-        || !value.controls.every(validateRunControl) || new Set(value.controls.map(c => c.id)).size !== value.controls.length
-        || value.controls.some((c, i) => i > 0 && c.sequence <= value.controls[i - 1].sequence)) {
-      throw new CliError("control_invalid", "Malformed controls projection");
-    }
-    return value.controls;
-  }
-
-  async clarificationAnswer(runId, questionId, answers, signal = undefined) {
-    const value = await this.#json("POST", `/api/runs/${encodeURIComponent(runId)}/clarifications/${encodeURIComponent(questionId)}/answer`,
-      { body: { answers }, signal });
-    if (!validateRunAck(value) || value.run_id !== runId) throw new CliError("run_ack_invalid", "Malformed answer acknowledgement");
-    return value;
-  }
-
   async inputAdd(projectId, bytes, contentType, signal = undefined) {
     const value = await this.#json("POST", `/api/projects/${encodeURIComponent(projectId)}/inputs`, {
       rawBody: bytes, contentType, signal,
@@ -806,56 +656,6 @@ export class VecteurClient {
     }
   }
 
-  async projectionGet(projectId, runId, projection, onChunk, signal = undefined) {
-    const ref = projection?.payload_ref;
-    if (typeof projectId !== "string" || !projectId || typeof runId !== "string" || !runId
-        || projection?.kind !== "transfer_table" || projection?.run_id !== runId
-        || projection?.project_id !== projectId
-        || !/^projection-[0-9a-f]{64}$/.test(projection?.projection_id ?? "")
-        || ref?.schema !== "vecteur.owner-transfer-table.v1"
-        || ref?.media_type !== "application/vnd.vecteur.owner-transfer-table+json"
-        || !/^[0-9a-f]{64}$/.test(ref?.payload_sha256 ?? "")
-        || typeof onChunk !== "function") {
-      throw new CliError("projection_invalid", "projection get requires a sealed transfer table on this Run");
-    }
-    const route = `/api/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}`
-      + `/projections/${encodeURIComponent(projection.projection_id)}/payload`;
-    const response = await this.request("GET", route, {
-      accept: ref.media_type, acceptEncoding: "identity", signal,
-    });
-    try {
-      if (response.headers.get("content-type")?.split(";", 1)[0] !== ref.media_type
-          || (response.headers.get("content-encoding") ?? "identity").toLowerCase() !== "identity") {
-        throw new CliError("projection_invalid", "Server returned the wrong projection media type");
-      }
-      const disposition = response.headers.get("x-vecteur-projection-disposition");
-      if (disposition !== "current" && disposition !== "historical") {
-        throw new CliError("projection_invalid", "Server returned no valid projection disposition");
-      }
-      const declared = response.headers.get("content-length");
-      if (declared === null || !/^(?:0|[1-9][0-9]*)$/.test(declared)
-          || Number(declared) > 256 * 1024 || !response.body) {
-        throw new CliError("projection_invalid", "Projection byte length is invalid");
-      }
-      const digest = createHash("sha256");
-      let bytes = 0;
-      for await (const chunk of response.body) {
-        response[RESPONSE_ACTIVITY]?.();
-        bytes += chunk.byteLength;
-        if (bytes > Number(declared)) throw new CliError("projection_invalid", "Projection exceeds its declared size");
-        digest.update(chunk);
-        await onChunk(chunk);
-      }
-      if (bytes !== Number(declared) || digest.digest("hex") !== ref.payload_sha256) {
-        throw new CliError("projection_invalid", "Projection bytes differ from RunWire");
-      }
-      return { projection_id: projection.projection_id, project_id: projectId,
-        run_id: runId, content_type: ref.media_type, bytes, disposition };
-    } finally {
-      response[RELEASE_TIMEOUT]?.();
-    }
-  }
-
   /**
    * The Project's newest Run from the owner page — the record the web chains on
    * (`CanvasPage.vue` designHead). Its public `state_hash` is the design head once the Run is
@@ -871,7 +671,7 @@ export class VecteurClient {
         + "next: continue in the web app, or pass --parent <state-hash>");
     }
     // Client-local presentation overlay, as in the web transcript. Never write this
-    // timestamp into the immutable RunWire response or send it back to the server.
+    // timestamp into the immutable run record or send it back to the server.
     return newest ? { ...newest.response, accepted_at: newest.accepted_at, ask: newest.request.ask } : null;
   }
 
@@ -881,16 +681,15 @@ export class VecteurClient {
     const page = await this.#json("GET", `/api/projects/${encodeURIComponent(projectId)}/runs?${query}`, { signal });
     if (!exactKeys(page, ["runs", "next_before"]) || !Array.isArray(page.runs) || page.runs.length > limit
         || (page.next_before !== null && typeof page.next_before !== "string")
-        || page.runs.some(row => row?.request?.project_id !== projectId || typeof row.request.ask !== "string"
-          || !validateAdmitted(row.response) || !isStateHash(row.response.state_hash))) {
+        || page.runs.some(row => row?.request?.project_id !== projectId || typeof row.request.ask !== "string")) {
       throw new CliError("project_runs_invalid", "Server returned malformed Project run history");
     }
-    for (const row of page.runs) row.response.events.forEach((event, seq) => validateEvent(event, row.response.run_id, seq));
+    for (const row of page.runs) validateRun(row.response);
     return page;
   }
 
   /** One bounded admission. Callers own the key; neither timeout nor conflict generates another. */
-  async runStart(projectId, ask, { requestKey, parentStateHash, attachments, selections, signal, intent, executor } = {}) {
+  async runStart(projectId, ask, { requestKey, parentStateHash, attachments, selections, signal } = {}) {
     let parent = parentStateHash;
     try {
       if (!isRequestKey(requestKey)) throw new CliError("request_key_invalid", "request_key must be 8–64 letters, digits, _ or -");
@@ -907,8 +706,7 @@ export class VecteurClient {
         }
         material = { ...material, attachments };
       }
-      const body = { ask, ...material, parent_state_hash: parent, ui_context: null,
-        ...(intent === undefined ? {} : { intent }), ...(executor ? { local_exec: executor.descriptor } : {}) };
+      const body = { ask, ...material, parent_state_hash: parent, ui_context: null };
       return await withAdmissionLock(() => this.#startAdmission(projectId, body, requestKey, signal), this.localEnv ?? process.env);
     } catch (error) { throw this.#startFailure(error, requestKey, parent); }
   }
@@ -926,14 +724,14 @@ export class VecteurClient {
 
   async #startAdmission(projectId, body, key, signal) {
     const env = this.localEnv ?? process.env;
-    const id = body.local_exec ? null : admissionIntent(this.config.origin, projectId, key, body, env);
+    const id = admissionIntent(this.config.origin, projectId, key, body, env);
     try {
       const ack = await this.runAdmit(projectId, body, key, signal);
       if (!validateRunAck(ack)) throw new CliError("run_ack_invalid", "Server returned malformed run acknowledgement");
-      if (id) admissionResolved(id, env);
+      admissionResolved(id, env);
       return { ...ack, parent_state_hash: body.parent_state_hash };
     } catch (error) {
-      if (id && (error.admission === "refused" || ["state_fork", "state_busy"].includes(error.code))) admissionResolved(id, env);
+      if (error.admission === "refused" || ["state_fork", "state_busy", ...OWNER_WORDED].includes(error.code)) admissionResolved(id, env);
       if (error instanceof CliError && ["state_fork", "state_busy"].includes(error.code)) {
         throw await this.#admissionRefused(error.code, projectId, body.parent_state_hash, signal);
       }
@@ -959,7 +757,6 @@ export class VecteurClient {
             throw new CliError("request_key_reused", "This request key already names a different ask, parent, Project or attachment set");
           }
           if (saved.version !== 1 || saved.request_key !== requestKey || saved.body?.ask !== ask
-              || saved.body?.local_exec !== undefined
               || saved.body?.parent_state_hash !== parent || saved.body?.ui_context !== null
               || canonicalJson(submissionMaterial(saved.body?.selections)) !== canonicalJson({
                 attachments: saved.body?.attachments, ...(saved.body?.selections ? { selections: saved.body.selections } : {}) })) {
@@ -992,24 +789,16 @@ export class VecteurClient {
     } catch (error) { throw this.#startFailure(error, requestKey, parent); }
   }
 
-  /** The legacy blocking door retains its success record and error prose. */
-  async runSubmit(projectId, ask, onEvent = null, signal = undefined, parentStateHash = undefined,
-    selections = undefined, intent = undefined, executor = undefined) {
-    const value = await this.runStart(projectId, ask, { requestKey: randomUUID(), parentStateHash, selections, signal, intent, executor });
-    try {
-      const pump = executor?.pump(value.run_id).catch(() => executor.stop());
-      try { return await this.runEvents(value.run_id, onEvent, signal); }
-      finally { executor?.stop(); await pump; }
-    } catch (error) {
-      throw admittedFailure(error, value.run_id);
-    }
+  /** The blocking door: admit, follow to the terminal, return the record. */
+  async runSubmit(projectId, ask, onEvent = null, signal = undefined, parentStateHash = undefined, selections = undefined) {
+    const value = await this.runStart(projectId, ask, { requestKey: randomUUID(), parentStateHash, selections, signal });
+    try { return await this.runEvents(value.run_id, onEvent, signal); }
+    catch (error) { throw admittedFailure(error, value.run_id); }
   }
 
   async runStatus(runId, signal = undefined) {
     const record = await this.runGet(runId, signal);
-    const latest = record.events.filter(event => event.kind === "clarification").at(-1)?.payload;
-    return { run_id: record.run_id, terminal: record.terminal, last_seq: record.events.at(-1)?.seq ?? -1,
-      clarification: latest?.state === "requested" ? latest : null };
+    return { run_id: record.run_id, terminal: record.terminal, last_seq: record.events.at(-1)?.seq ?? -1 };
   }
 
   async #admissionRefused(code, projectId, sent, signal) {
@@ -1017,11 +806,7 @@ export class VecteurClient {
     try { newest = await this.projectNewestRun(projectId, signal); } catch { newest = undefined; }
     if (code === "state_busy" && newest?.terminal === "") {
       const run = newest.run_id;
-      const question = newest.events.filter((event) => event.kind === "clarification").at(-1);
-      const waiting = question?.payload?.state === "requested"
-        ? ` [waiting for an answer: ${this.config.origin}/dashboard/${encodeURIComponent(projectId)}?run=${encodeURIComponent(run)}]`
-        : "";
-      return new CliError(code, `Run ${run} is still open in Project ${projectId}${waiting}; `
+      return new CliError(code, `Run ${run} is still open in Project ${projectId}; `
         + `nothing was admitted; next: vecteur run get ${run}`);
     }
     if (code === "state_fork" && newest !== undefined) {
@@ -1051,16 +836,11 @@ export class VecteurClient {
 
   async runGet(runId, signal = undefined) {
     const value = await this.#json("GET", `/api/runs/${encodeURIComponent(runId)}`, { signal });
-    if (!validateAdmitted(value) || value.run_id !== runId) {
-      throw new CliError("run_invalid", "Server returned malformed run record");
-    }
-    value.events.forEach((event, seq) => validateEvent(event, runId, seq));
-    validateChildRows(value.events, value.stored_wire_version);
-    return value;
+    return validateRun(value, runId);
   }
 
   async runEvents(runId, onEvent = null, signal = undefined, priorEvents = []) {
-    priorEvents.forEach((event, seq) => validateEvent(event, runId, seq));
+    priorEvents.forEach((event, index) => validateEvent(event, runId, FIRST_EVENT_SEQ + index));
     if (priorEvents.length > MAX_EVENTS) throw new CliError("response_too_large", "Event count exceeds limit");
     if (priorEvents.at(-1)?.kind === "terminal") {
       const direct = await this.runGet(runId, signal);
@@ -1072,7 +852,7 @@ export class VecteurClient {
     const response = await this.request("GET", `/api/runs/${encodeURIComponent(runId)}/events`, {
       accept: "text/event-stream",
       signal,
-      lastEventId: priorEvents.length ? priorEvents.length - 1 : undefined,
+      lastEventId: priorEvents.length ? priorEvents.at(-1).seq : undefined,
     });
     let events;
     let streamedVersion;
@@ -1083,11 +863,9 @@ export class VecteurClient {
       }
       streamedVersion = Number(response.headers.get(STORED_WIRE_VERSION_HEADER));
       if (!STORED_WIRE_VERSIONS.includes(streamedVersion)) {
-        throw new CliError("sse_invalid", "Event stream declares no known stored RunWire version");
+        throw new CliError("sse_invalid", "Event stream declares no known stored wire version");
       }
-      const guard = rowGuard(streamedVersion);
-      priorEvents.forEach(guard);
-      events = [...priorEvents, ...await parseSse(response, runId, onEvent, priorEvents.length, guard)];
+      events = [...priorEvents, ...await parseSse(response, runId, onEvent, FIRST_EVENT_SEQ + priorEvents.length)];
     } catch (error) {
       if (error?.name === "AbortError") {
         if (signal?.aborted) throw new CliError("request_cancelled", "Following the Run was detached");
@@ -1104,12 +882,8 @@ export class VecteurClient {
     }
     const direct = await this.runGet(runId, signal);
     if (JSON.stringify(events) !== JSON.stringify(direct.events)
-        || streamedVersion !== direct.stored_wire_version) {
+        || (direct.stored_wire_version !== undefined && streamedVersion !== direct.stored_wire_version)) {
       throw new CliError("record_mismatch", "Event stream disagrees with direct replay");
-    }
-    const eventTerminal = events.at(-1).payload.state ?? events.at(-1).payload.terminal;
-    if (eventTerminal !== direct.terminal) {
-      throw new CliError("terminal_mismatch", "Terminal event disagrees with direct record");
     }
     return direct;
   }

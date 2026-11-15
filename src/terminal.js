@@ -37,25 +37,12 @@ export class TerminalWriter {
     if (this.awaiting) this.since += rows;
     else if (this.row) this.row = Math.min(this.stdout.rows ?? 24, this.row + rows);
   }
-  progress(view, { controlsOnly = false } = {}) {
+  progress(view) {
     const subject = view.run?.subject?.id;
-    if (subject !== this.subject) { this.subject = subject; this.lastProgress = null; this.lastQuestion = null; this.controls = new Map(); }
+    if (subject !== this.subject) { this.subject = subject; this.lastProgress = null; }
     if (!subject || view.run.terminal) return;
-    if (!controlsOnly && view.run.progress && view.run.progress !== this.lastProgress) {
+    if (view.run.progress && view.run.progress !== this.lastProgress) {
       this.append(safe(`${view.run.progress} · ${view.run.elapsed ?? "Elapsed unavailable"}`)); this.lastProgress = view.run.progress;
-    }
-    for (const block of view.run.blocks ?? []) {
-      if (block.kind !== "control") continue;
-      const signature = JSON.stringify(block.payload);
-      if (this.controls.get(block.key) === signature) continue;
-      this.controls.set(block.key, signature);
-      this.append(safe(`Controls:\n${blockText(block)}`));
-    }
-    if (controlsOnly) return;
-    const question = view.run.question;
-    if (question?.id !== this.lastQuestion) {
-      this.lastQuestion = question?.id;
-      if (question) this.append(safe(`Vecteur needs your answer — /answer\n${question.questions.map(row => row.question).join("\n")}`));
     }
   }
   /** Scrollback text, then the given live frame in the same write: the composer never blinks out. */
@@ -141,9 +128,9 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
   let lastPlainStatus = "", lastPlainIdentity = "", plainDraft = "", frameTimer, clockTimer, cancelAt = 0, cancelRun, exitAt = 0;
   let snapshot = null, localPicker = null, loginAction = 0, updateChecked = false, tick = 0;
   // While a vendor owns the TTY (handoff) Vecteur writes nothing: frames, clocks, streamed
-  // steps and messages wait, and are flushed once when the vendor exits.
+  // blocks and messages wait, and are flushed once when the vendor exits.
   let vendorOwnsTerminal = false, resizedDuringHandoff = false; const heldMessages = [];
-  // Immutable event blocks commit once; mutable controls have their own live/final section.
+  // Immutable event blocks commit once.
   const streamed = { run: null, keys: new Set() };
   // The identity header is live until the first transcript block, then committed once.
   let headerLive = true, cursorHidden = false;
@@ -208,7 +195,7 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
   const commitBlocks = (runId, blocks) => {
     if (streamed.run !== runId) { streamed.run = runId; streamed.keys = new Set(); }
     for (const block of blocks) {
-      if (!block.committed || ["control", "terminal"].includes(block.kind) || streamed.keys.has(block.key)) continue;
+      if (!block.committed || block.kind === "terminal" || streamed.keys.has(block.key)) continue;
       print(writer.plain ? blockText(block) : layout.richMessage({ kind: "block", block }, stdout.columns ?? 80, theme));
       streamed.keys.add(block.key);
     }
@@ -219,7 +206,6 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
     if (ticking && !clockTimer) clockTimer = setInterval(() => { tick++; draw(); }, prefs.reducedMotion ? 1000 : 200);
     if (!ticking) { clearInterval(clockTimer); clockTimer = null; }
     const run = session.run;
-    if (!writer.plain && (stdout.rows ?? 24) < 18) writer.progress(view, { controlsOnly: true });
     if (run?.open && Array.isArray(run.events)) commitBlocks(run.run_id, view.run.blocks);
     if (process.connected && process.send && env.VECTEUR_UPDATE_SESSION && session.release?.compatible
         && session.registry && (!view.busy || view.prompt)) {
@@ -232,7 +218,7 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
       history.length = 0; historyIndex = 0; historyDraft = ""; historyAccount = accountKey; input.undo = []; input.killed = ""; snapshot = null; }
     if (writer.plain) {
       writer.progress(view);
-      const identity = `${view.account?.email ?? "Not signed in"} · ${view.projectLabel}\n${view.folder}\n${view.lead} · ${view.location} · ${view.model}`;
+      const identity = `${view.account?.email ?? "Not signed in"} · ${view.projectLabel}\n${view.folder}\n${view.model} · ${view.location}`;
       if (identity !== lastPlainIdentity) { writer.append(safe(identity)); lastPlainIdentity = identity; }
     }
     if (view.prompt !== activePrompt) {
@@ -262,10 +248,6 @@ export async function startTerminal(options = {}, { stdin = process.stdin, stdou
     // Flush the terminal prefix too: unmatched calls close only in the final direct record.
     if (message.kind === "answer" && message.sections?.blocks) commitBlocks(message.runId, message.sections.blocks);
     const shownKeys = new Set(message.runId === streamed.run ? streamed.keys : []);
-    if (message.runId === writer.subject) {
-      for (const block of message.sections?.blocks ?? []) if (block.kind === "control"
-          && writer.controls?.get(block.key) === JSON.stringify(block.payload)) shownKeys.add(block.key);
-    }
     const text = writer.plain ? message.kind === "answer" && message.sections
       ? safe(humanRunSections(message.sections, { shownKeys })) : safe(message.text)
       : layout.richMessage(message, stdout.columns ?? 80, theme, { shownKeys });
