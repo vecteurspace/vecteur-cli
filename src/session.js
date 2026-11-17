@@ -298,7 +298,6 @@ export class Session extends EventEmitter {
     // At a limit the server says what this reader may do; a failed read names no plan and never fails the Run.
     const stopOffer = run.terminal === "budget" ? await this.client.stopOffer(run.run_id) : undefined;
     if (this.run !== run || this.closed) return false;
-    if (stopOffer) void this.client.stopEvent(run.run_id, { event: "shown", surface: "cli" });
     const options = { stopOffer, origin: this.origin };
     this.message(humanRun(run, options), "answer", { runId: run.run_id, sections: runSections(run, options) });
     this.lastPrintedRun = run.run_id;
@@ -377,6 +376,8 @@ export class Session extends EventEmitter {
       return;
     }
     this.setDraft(text);
+    const blank = this.blanks?.find(known => text.includes(known));
+    if (blank) { this.status = `Replace ${blank} with your own value, then send`; this.change(); return; }   // the server refuses it too, later
     this.registry?.saveDraft(text);
     const draftRef = structuredClone(this.registry?.draftRef ?? null);
     this.busy = true; this.status = "Submitting"; this.change();

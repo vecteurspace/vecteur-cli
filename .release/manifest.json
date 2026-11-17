@@ -2,7 +2,7 @@
   "files": {
     ".github/workflows/release.yml": {
       "mode": 420,
-      "sha256": "38f2c3f2aaf52b2a39729b827c13bc9fe17acec8d432491907f85ebb726ff742"
+      "sha256": "21b2b3ee05013fbe2b2d9c7a8639568191d64893457841bb0504ffc4856e0a4f"
     },
     ".release/verify.py": {
       "mode": 420,
@@ -10,15 +10,15 @@
     },
     "README.md": {
       "mode": 420,
-      "sha256": "12460c743082c8df11864d6c1ddb096a37e5bd3a572dbc2e14813261abdcbecb"
+      "sha256": "f669c4f4c9d513f0d69c9b12a24b5628ede0a88d83975a6be7eff1cd63a11e46"
     },
     "bin/vecteur.js": {
       "mode": 493,
-      "sha256": "3d437bf1882c61c30f4b4f16b32ecd4b0dd7d740e2bc7a3a1905fd7211eb1b00"
+      "sha256": "6eb8875e2c03499ce65b4fed660c5348eaa0a54b962c49cc7f78d148aedf87a5"
     },
     "package.json": {
       "mode": 420,
-      "sha256": "8a493535d524ed91683f6b22371b33e34bbb3a8b48a718e059b00c35787d9c32"
+      "sha256": "5f2096c0e1ad9e15a92047482191be50efe42f2dc0d0bcb8e00a2c9c4cad0749"
     },
     "src/blocks.js": {
       "mode": 420,
@@ -30,15 +30,15 @@
     },
     "src/client.js": {
       "mode": 420,
-      "sha256": "cfbbeb74832228b348ae2dd7650a168020dedfa3d091da54d9575f3c5d3d775c"
+      "sha256": "e27657f644e42a700e2c615a6c6a3686bcd37ad014f297ccbccbec782fbdcda4"
     },
     "src/commands.js": {
       "mode": 420,
-      "sha256": "eaf73a69a96db16b71f7e1d74955d7404680811a131ea9ab4a68ab89ec8a5c3a"
+      "sha256": "6f75fb82f5c2c8cabc02b749e9f1655200457314e2413f6ca4c5f39c9b8191cc"
     },
     "src/contract.js": {
       "mode": 420,
-      "sha256": "13c0eeaf040540fbe6b8434eab4757a323c1565970ed2d7fc2df4b0a5df13304"
+      "sha256": "2a36fde53105dd1f90e2670e9cba63e29030c129ad7c6c5a9efbb9a67a6d5a88"
     },
     "src/credentials.js": {
       "mode": 420,
@@ -66,7 +66,7 @@
     },
     "src/format.js": {
       "mode": 420,
-      "sha256": "88e51f217cc04c47e451a9d5610f89afd9a112d6322bed7a9cf0a362dcbe7c96"
+      "sha256": "90b0bf12a55a87309be96d6e76f85906c5671df791fe53802d9aee19bc1ed1d3"
     },
     "src/input.js": {
       "mode": 420,
@@ -78,11 +78,11 @@
     },
     "src/markdown.js": {
       "mode": 420,
-      "sha256": "f686301c2879201f4334278beb41e7fea230000bddc182c1a1e9e9b65d9b5724"
+      "sha256": "9826b41546c636ac0d7810014782182ddcaab6be60141f1313f9ba6d62707891"
     },
     "src/mcp.js": {
       "mode": 420,
-      "sha256": "d7351d74c55a21d136301825750bab1606beecdd52b9c51e228baa14b6677914"
+      "sha256": "26ddd9b41d3800c7f4b61ff4ab07c6091eca42ec2eceb324cb28781e7330d439"
     },
     "src/preferences.js": {
       "mode": 420,
@@ -94,7 +94,7 @@
     },
     "src/session.js": {
       "mode": 420,
-      "sha256": "29878e087d8d1e99d8d8e47ef4c895da9cd03201ec17f9ec65f2edae3bebac9a"
+      "sha256": "46fc416f8c6bcc4fee615f86b92f8d841ac1af199bc01d4e5ad53030e696c0c1"
     },
     "src/stop-words.js": {
       "mode": 420,
@@ -127,13 +127,13 @@
   },
   "release": {
     "cli": {
-      "contract_identity": "api-sha256:1973f8517a4c3f6cbbfd2cfc9dffb477a75a8bf3cd2291577a4f07e0b6edd614;run-wire-sha256:678602fd4f1dba0493ad0f860be24bbf88532945edfe9dbe1555e5145bbbeefb",
-      "integrity": "sha512-5sZ1wCPHmrF5uPqBy3yrkbXG87DQ77hYjRVDzdSWoMOXPW4gXF4M+OXaBQO8h3GIDNu7f8x9FnKeR5t63c+vHA==",
+      "contract_identity": "api-sha256:bea0597dcb6e7e6d576ec53de9016f64c710b6787a0cfa7bcb7c6fe27e73989f;run-wire-sha256:678602fd4f1dba0493ad0f860be24bbf88532945edfe9dbe1555e5145bbbeefb",
+      "integrity": "sha512-B/suVCJnhxOOUX/kzMx5ecOIrXpCCmJBzzkWCKr2z6rQ2uOvy7IlIYTnneK8pb0JFpJApfo+u5lpxMSqNIFK5w==",
       "package": "@vecteur/cli",
-      "version": "0.12.4"
+      "version": "0.13.1"
     },
     "schema": "release-cli.v1",
-    "tag": "v6.0.0"
+    "tag": "v6.1.0"
   },
   "tracked": [
     ".github/workflows/release.yml",

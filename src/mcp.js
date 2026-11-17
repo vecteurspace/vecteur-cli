@@ -7,7 +7,7 @@ import * as z from "zod/v4";
 
 import { CliError, OWNER_WORDED, VecteurClient, redact } from "./client.js";
 import { EVENT_KINDS, STORED_WIRE_VERSIONS, TERMINAL_STATES } from "./contract.js";
-import { canonicalJson } from "./format.js";
+import { canonicalJson, fillPrompt } from "./format.js";
 import { artifactToFolder, materialAttach } from "./exchange.js";
 import { credentialsPath } from "./credentials.js";
 import { readStore, withStoreLock, writeStore } from "./store.js";
@@ -99,6 +99,19 @@ const materialOutput = z.object({
   extract_count: z.number().int().safe().nonnegative(),
   selections: z.array(selectionInput).min(1),
 }).strict();
+// `GET /api/workflows` as served: the guided workflows, each an MCP prompt below. The envelope is exact; a workflow
+// is not (unlike the tools' records): the definitions are data that grows, and a member added there must not make
+// an installed CLI refuse the list.
+const text = z.string().min(1);
+const workflowListOutput = z.object({
+  object: z.literal("list"), has_more: z.literal(false),
+  data: z.array(z.object({
+    id: text, label: text, name: text, description: text, prompt: text,
+    arguments: z.array(z.object({ name: text, description: text, required: z.literal(true) })),
+    files: z.object({ label: text, required: z.boolean(), formats: z.array(text) }).optional(),
+    steps: z.object({ bring: text, get: text }),
+  })),
+}).strict();
 
 function success(value) {
   return {
@@ -111,7 +124,9 @@ function failure(error, lifecycle = false) {
   const code = error instanceof CliError && /^[a-z][a-z0-9_]{0,63}$/.test(error.code)
     ? error.code : "internal_error";
   // A read-only (v5) Project and a retired door carry the owner's own sentence (validated by the client).
-  const message = OWNER_WORDED.includes(code) ? { message: error.message } : {};
+  // So does an ask refused for an unfilled workflow blank (the client kept only the server's sentence naming it).
+  const message = OWNER_WORDED.includes(code) || (code === "field_invalid" && error.message.startsWith("The question still holds an unfilled blank: "))
+    ? { message: error.message } : {};
   const details = Object.fromEntries((lifecycle ? ["run_id", "request_key", "parent_state_hash", "pending"] : ["run_id", "pending"])
     .filter(field => error instanceof CliError && Object.hasOwn(error, field))
     .map(field => [field, typeof error[field] === "string" ? redact(error[field]) : error[field]]));
@@ -131,8 +146,19 @@ function tool(server, name, description, inputSchema, outputSchema, call, lifecy
   });
 }
 
-export function createVecteurMcpServer(client = new VecteurClient(), shutdownSignal = undefined) {
+export async function createVecteurMcpServer(client = new VecteurClient(), shutdownSignal = undefined) {
   const server = new McpServer({ name: "vecteur", version: "0.1.0" });
+  // Each workflow is a prompt, read from the route at start (prompts are registered before connect). An
+  // unreachable or older origin starts with no prompt, never a failure: the tools do not depend on it.
+  const workflows = await client.workflows(shutdownSignal).catch(() => ({ data: [] }));
+  for (const workflow of workflows.data) {
+    server.registerPrompt(`vecteur_${workflow.id}`, {
+      title: workflow.name, description: workflow.description,
+      argsSchema: z.object(Object.fromEntries(workflow.arguments.map(item => [item.name, text.describe(item.description)]))),
+    }, values => ({ messages: [{ role: "user", content: { type: "text", text: `${fillPrompt(workflow, item => values[item.name])}\n\n`
+      + (workflow.files?.required ? "Attach the file first with vecteur_material_attach and pass its returned selections. " : "")
+      + "Send this ask with vecteur_run_submit (or vecteur_run_start for a long run) in your project." } }] }));
+  }
   // Upload is not admission. Pending material lives in the private local store beside the login,
   // so a restarted server still refuses a submit/start that omits it. It is kept until a submit/start
   // succeeds, including after refusals, unless the caller deliberately discards this Project's material.
@@ -212,6 +238,9 @@ export function createVecteurMcpServer(client = new VecteurClient(), shutdownSig
         origin, projectId, cas_ref: handle.cas_ref, acquisition_ref: handle.acquisition_ref, nonce: randomUUID() }; });
       return result;
     });
+
+  tool(server, "vecteur_workflow_list", "List the guided workflows (also served as this server's prompts): what to bring, what you get, and the ask with its {{blanks}}. Fill every blank, then send it with vecteur_run_submit.",
+    z.object({}).strict(), workflowListOutput, (_input, context) => client.workflows(signal(context)));
 
   return server;
 }

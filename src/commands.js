@@ -3,7 +3,8 @@ import { CliError } from "./errors.js";
 import { runBlocks, blockText } from "./blocks.js";
 import { openBrowser } from "./browser.js";
 import { diagnose } from "./diagnostics.js";
-import { humanCost, terminalText } from "./format.js";
+import { humanCost, humanWorkflow, humanWorkflows, scaffold, terminalText } from "./format.js";
+import { requestTimeout } from "./client.js";
 import { preferences, savePreferences } from "./preferences.js";
 
 export const SHORTCUTS = `Enter sends when ready; while a Run is working it keeps the draft.
@@ -75,6 +76,18 @@ add("project", "Choose a Project or start a new study draft", async (s, argument
   if (s.run?.open || s.registry.state().pendingRun || s.registry.state().pendingCreate) throw new CliError("run_busy", "Resolve or finish the current Run before starting a new study");
   await withAdmissionLock(() => s.registry.unlink(), s.env); s.binding = null; s.project = null; s.run = null; s.attachments = []; s.status = "New Project on first send"; s.change();
 }, { argument: "[list]", requires: "login" });
+add("workflow", "List the guided workflows, or start a draft from one", async (s, id) => {
+  if (s.offline) throw new CliError("action_unavailable", "Offline — /resume");
+  const { data } = await s.clientFactory({ origin: s.origin, token: "", timeout: requestTimeout(s.env) }).workflows();
+  if (!id) return s.message(humanWorkflows(data).trimEnd());
+  const workflow = data.find(item => item.id === id);
+  if (!workflow) throw new CliError("workflow_not_found", `No workflow ${id}; /workflow lists them`);
+  // The engineer's own text is never replaced; an untouched scaffold is.
+  if (s.draft.trim() && !data.map(scaffold).includes(s.draft)) throw new CliError("draft_kept", "Your draft is kept; /clear it first to start from a workflow");
+  // The blanks this draft may still hold: a send with one left is held here, before any upload or Project is made.
+  s.blanks = data.flatMap(item => item.arguments.map(argument => `[${argument.description}]`));
+  s.setDraft(scaffold(workflow)); s.message(humanWorkflow(workflow, false).trimEnd());
+}, { argument: "[id]" });
 add("link", "Link an existing Project to this folder", s => s.link(), { requires: "login" });
 add("unlink", "Remove this folder's Project binding", async s => {
   if (s.run?.open || s.busy || s.registry.state().pendingRun || s.registry.state().pendingCreate) throw new CliError("run_busy", "Resolve or finish the current Run before unlinking");

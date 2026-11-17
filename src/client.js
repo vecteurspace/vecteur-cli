@@ -301,8 +301,10 @@ export class VecteurClient {
 
   async request(method, path, { body, rawBody, contentType, idempotencyKey, accept, acceptEncoding, signal,
     lastEventId, anonymousReadiness = false } = {}) {
-    if (anonymousReadiness && (method !== "GET" || path !== "/api/ready" || body !== undefined || rawBody !== undefined)) {
-      throw new CliError("request_invalid", "Anonymous compatibility inspection is restricted to readiness");
+    // Anonymous: no credential and no client identity, for the public reads only (readiness, the workflows).
+    if (anonymousReadiness && (method !== "GET" || !["/api/ready", "/api/workflows"].includes(path)
+        || body !== undefined || rawBody !== undefined)) {
+      throw new CliError("request_invalid", "Anonymous requests are restricted to readiness and the workflows");
     }
     if (body !== undefined && rawBody !== undefined) throw new CliError("request_invalid", "Choose JSON or raw bytes");
     const controller = new AbortController();
@@ -426,6 +428,11 @@ export class VecteurClient {
                 && error.message.length <= 512 && !/[\r\n\0]/.test(error.message)) {
               ownerMessage = error.message;
             }
+            // A workflow ask sent with a blank left (run admission): the server's sentence names the blank.
+            if (candidate === "field_invalid" && typeof error.message === "string" && error.message.length <= 512
+                && error.message.startsWith("The question still holds an unfilled blank: ") && !/[\r\n\0]/.test(error.message)) {
+              try { ownerMessage = refuseSecretValue(error.message); } catch {}
+            }
             if (
               candidate === "client_outdated"
               && Object.keys(error).sort().join("\n") === "code\nmessage"
@@ -503,6 +510,21 @@ export class VecteurClient {
       }
       return { contract, compatible, cli, requiredVersion };
     } finally { response[RELEASE_TIMEOUT]?.(); }
+  }
+
+  /** The guided workflows (`GET /api/workflows`): public, read anonymously, so before login too. */
+  async workflows(signal = undefined) {
+    const value = await this.#json("GET", "/api/workflows", { signal, anonymousReadiness: true });
+    const text = v => typeof v === "string" && v.length > 0;
+    const valid = exactKeys(value, ["object", "data", "has_more"]) && value.object === "list" && Array.isArray(value.data)
+      && value.data.every(w => w && typeof w === "object" && /^[a-z][a-z0-9_]{0,63}$/.test(w.id)
+        && [w.label, w.name, w.description, w.prompt].every(text)
+        && w.steps && [w.steps.bring, w.steps.get].every(text)
+        && (w.files === undefined || (w.files && text(w.files.label) && Array.isArray(w.files.formats)
+          && w.files.formats.every(text)))
+        && Array.isArray(w.arguments) && w.arguments.every(a => a && /^[A-Za-z0-9_]+$/.test(a.name) && text(a.description)));
+    if (!valid) throw new CliError("workflows_invalid", "Server returned malformed workflow data");
+    return value;
   }
 
   async projectCreate(name, workspaceId, signal = undefined, idempotencyKey = undefined) {
@@ -827,11 +849,6 @@ export class VecteurClient {
       if (error?.name === "AbortError") throw error;
       return null;
     }
-  }
-
-  /** The authenticated measurement door. Measurement never fails the reader's run. */
-  async stopEvent(runId, body, signal = undefined) {
-    try { await this.#json("POST", `/api/runs/${encodeURIComponent(runId)}/stop-offer/events`, { signal, body }); } catch (error) { if (error?.name === "AbortError") throw error; }
   }
 
   async runGet(runId, signal = undefined) {

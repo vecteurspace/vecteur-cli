@@ -10,7 +10,7 @@ import {
 } from "../src/credentials.js";
 import { downloadArtifact, exportRun } from "../src/download.js";
 import { humanProjects, resolveNamed, resolveRunProject, resolveWorkspace } from "../src/projects.js";
-import { canonicalJson, human, humanCost, progress } from "../src/format.js";
+import { canonicalJson, human, humanCost, humanWorkflow, humanWorkflows, progress } from "../src/format.js";
 import { openBrowser } from "../src/browser.js";
 
 function manifest() {
@@ -43,7 +43,7 @@ function refuseOldNode() {
 
 function helpText(version) {
   return `vecteur ${version}
-  login | logout | whoami | project list | project create <name> [--workspace <name-or-id>] | project use <name-or-id> | project get <id> | run submit [-p <id>] -a <ask> [--parent <state-hash>] | run get <id> | run events <id> | run export <id> [--output <dir>] [-p <id>] | artifact get <id> [--output <path>] [-p <id>] | mcp
+  login | logout | whoami | workflow list | workflow show <id> | project list | project create <name> [--workspace <name-or-id>] | project use <name-or-id> | project get <id> | run submit [-p <id>] -a <ask> [--parent <state-hash>] | run get <id> | run events <id> | run export <id> [--output <dir>] [-p <id>] | artifact get <id> [--output <path>] [-p <id>] | mcp
   mcp setup claude|codex adds Vecteur to your Claude Code/Codex · handoff claude|codex opens it in this terminal with Vecteur attached
   status | doctor | (bare vecteur opens an interactive session)
   --help  --version  --json  --origin <url>  --no-browser  --offline  --plain  --no-color  --local  -p/--project  -a/--ask  --output <path>
@@ -155,6 +155,11 @@ function parseCommand(argv) {
     if (workspace === undefined && args.length === 3 && args[1] === "use" && value(args[2])) {
       return { kind: "project_use", name: args[2], origin, json };
     }
+  }
+  if (args[0] === "workflow" && projectId === undefined && ask === undefined && output === undefined
+      && workspace === undefined && !noBrowser && !local) {
+    if (args.length === 2 && args[1] === "list") return { kind: "workflow_list", origin, json };
+    if (args.length === 3 && args[1] === "show" && value(args[2])) return { kind: "workflow_show", id: args[2], origin, json };
   }
   if (workspace !== undefined) throw new CliError("usage_invalid", "Invalid command grammar");
   if (args.length === 1 && args[0] === "login" && !local
@@ -360,6 +365,20 @@ async function main() {
     await whoami(command);
     return;
   }
+  // The workflows are public: read anonymously, so they work before login and need no stored origin to match.
+  if (command.kind === "workflow_list" || command.kind === "workflow_show") {
+    const client = new VecteurClient({ origin: resolveOrigin(process.env, undefined, command.origin),
+      token: "", timeout: requestTimeout(process.env) });
+    const { data } = await client.workflows();
+    if (command.kind === "workflow_list") {
+      process.stdout.write(command.json ? canonicalJson(data) : humanWorkflows(data));
+      return;
+    }
+    const workflow = data.find(item => item.id === command.id);
+    if (!workflow) throw new CliError("workflow_not_found", `No workflow ${command.id}; next: vecteur workflow list`);
+    process.stdout.write(command.json ? canonicalJson(workflow) : humanWorkflow(workflow));
+    return;
+  }
 
   const config = configuration(process.env, undefined, command.origin);
   rememberOrigin(command.origin, config.origin, process.env);
@@ -415,10 +434,7 @@ async function main() {
     renderOptions.projectId ??= config.projectId;
     renderOptions.origin = config.origin;
     // At a limit the server says what this reader may do; the stop card states the limit, so the usage block gives way to it.
-    if (value.terminal === "budget") {
-      renderOptions.stopOffer = await client.stopOffer(value.run_id);
-      if (renderOptions.stopOffer) await client.stopEvent(value.run_id, { event: "shown", surface: "cli" });
-    }
+    if (value.terminal === "budget") renderOptions.stopOffer = await client.stopOffer(value.run_id);
     // The settled Run is printed first: a later cost read may fail loudly, never erase the answer.
     process.stdout.write(human(value, renderOptions));
     if (command.kind === "run_submit" && value.terminal !== "budget") {

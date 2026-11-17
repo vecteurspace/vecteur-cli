@@ -214,3 +214,26 @@ export function progress(event) {
 export function plainLine(value) {
   return String(value).replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ");
 }
+
+/** A workflow's prompt with each `{{name}}` replaced in ONE pass by a function: a value is never re-read as a blank or as `$&`. */
+export function fillPrompt(workflow, valueOf) {
+  return workflow.prompt.replace(/\{\{([A-Za-z0-9_]+)\}\}/g, (blank, name) => {
+    const argument = workflow.arguments.find(item => item.name === name);
+    return argument ? valueOf(argument) : blank;
+  });
+}
+
+/** The ask the engineer edits: each blank shown as its description in brackets, as the web shows it. */
+export const scaffold = workflow => fillPrompt(workflow, argument => `[${argument.description}]`);
+
+export function humanWorkflows(workflows) {
+  return workflows.length ? workflows.map(w => `${plainLine(w.id)} · ${plainLine(w.name)} · ${plainLine(w.description)}\n`).join("")
+    : "No workflows.\n";
+}
+
+export function humanWorkflow(w, withScaffold = true) {
+  return [`${plainLine(w.name)} (${plainLine(w.id)})`, `You give: ${plainLine(w.steps.bring)}`,
+    ...(w.files ? [`Attach: ${plainLine(w.files.label)} · ${w.files.formats.map(f => plainLine(f).toUpperCase()).join(" ")}`
+      + (w.files.required ? " · required" : "")] : []),
+    `You get: ${plainLine(w.steps.get)}`, ...(withScaffold ? ["", terminalText(scaffold(w))] : []), ""].join("\n");
+}

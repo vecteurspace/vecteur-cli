@@ -34,6 +34,8 @@ export function closeOpenMarks(source) {
     const bold = (plain.replace(/`[^`]*`?/g, '').match(/\*\*/g) ?? []).length % 2 === 1;
     return `${text}${code ? '`' : ''}${bold && !code ? '**' : ''}`;
 }
+const FIGURE_UNIT = /\b(\d+(?:[.,]\d+)?) (?=(?:%|‰|°[CFK]?|[A-Za-zµΩ][A-Za-zµΩ²³]{0,3}(?:[/·.][A-Za-zµΩ²³]{1,3})?)(?:$|[\s,;:.)\]]))/g;
+export const keepUnits = (text) => text.replace(FIGURE_UNIT, '$1\u00a0');
 export function inlinePlain(inline) {
     return inline.map((token) => token.text).join('');
 }

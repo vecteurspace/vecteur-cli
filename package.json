@@ -1,6 +1,6 @@
 {
   "name": "@vecteur/cli",
-  "version": "0.12.4",
+  "version": "0.13.1",
   "type": "module",
   "bin": {
     "vecteur": "bin/vecteur.js"
@@ -53,7 +53,7 @@
   "devDependencies": {
     "@modelcontextprotocol/client": "2.0.0"
   },
-  "description": "The Vecteur command line \u2014 one login, the same product as the web app, from any directory.",
+  "description": "The Vecteur command line — one login, the same product as the web app, from any directory.",
   "license": "UNLICENSED",
   "repository": "git+https://github.com/vecteurspace/vecteur-cli.git",
   "publishConfig": {

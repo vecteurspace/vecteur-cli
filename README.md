@@ -25,6 +25,8 @@ For scripts and explicit one-shot commands:
 ```bash
 vecteur login
 vecteur whoami
+vecteur workflow list
+vecteur workflow show review
 vecteur project list
 vecteur project create 'Transfer study'
 vecteur project use 'Transfer study'
@@ -39,6 +41,12 @@ vecteur logout
 Use `vecteur login --origin URL` for another deployment. For automation, supply a Project PAT
 through `VECTEUR_TOKEN` and its origin through `VECTEUR_BASE_URL`; never pass a token on argv.
 `--help` and `--version` work without signing in.
+
+`workflow list` shows the guided workflows (review, feasibility, trade study) and `workflow show ID`
+what to bring, what you get and the ask with its blanks in [brackets]; both read the public
+`/api/workflows` route, work before login and honour `--json`. In a session, `/workflow ID` puts that
+ask in the draft (never over your own text). Replace every blank before sending: an ask that still
+holds one is refused `field_invalid`.
 
 `project list` shows authorized Projects and the server's Organization-wide active Project
 allowance. `project create NAME --workspace NAME_OR_ID` chooses among multiple Workspaces; one
@@ -76,6 +84,9 @@ SHA-256, and refuse to overwrite a local path. Use `--project ID` when no Projec
 Pass material_attach's returned `selections` verbatim to `vecteur_run_submit` or `vecteur_run_start` for that Project. For multiple files, concatenate their `selections` arrays. These select the same extracts as CLI `--attach`; upload alone does not admit material to a Run. Omitting that Project's pending material in the same MCP session refuses with `selection_required` before admission; pending material in another Project does not block it. To deliberately abandon pending material, pass the optional boolean `discard_pending_material: true` to submit or start: it clears only that Project's pending tracking before admission and uses the supplied selections, or none if omitted. The discard remains effective if admission refuses; it does not delete uploaded files. Omitting the flag or passing `false` retains the guard. A file with no selectable extracts refuses with `extraction_unavailable`.
 It also exposes `vecteur_run_start` and `vecteur_run_status` for long Runs. `vecteur_artifact_get`
 takes a `cas_ref`, or a `run_id` with the file's `artifact_path`. `vecteur_run_submit` blocks and is suitable only for short asks.
+Each guided workflow is also an MCP prompt, `vecteur_<id>` (all arguments required), read from the
+origin when the server starts (none if it is unreachable); `vecteur_workflow_list` returns the same
+definitions for hosts that show tools but not prompts.
 An MCP host supplies tool arguments; stdout carries only MCP protocol.
 
 `vecteur mcp setup claude` (or `codex`) runs that vendor's own `mcp add` once so your Claude Code
