@@ -293,6 +293,9 @@ export async function parseSse(response, runId, onEvent = null, startSeq = FIRST
   }
 }
 
+/** A history row as the newest-run overlay: the record, its acceptance time, its ask, and `review` when it is a recomputation. */
+const newestRow = row => ({ ...row.response, accepted_at: row.accepted_at, ask: row.request.ask, ...(row.request.review ? { review: true } : {}) });
+
 export class VecteurClient {
   constructor(config = configuration(), fetchImpl = fetch) {
     this.config = config;
@@ -694,7 +697,15 @@ export class VecteurClient {
     }
     // Client-local presentation overlay, as in the web transcript. Never write this
     // timestamp into the immutable run record or send it back to the server.
-    return newest ? { ...newest.response, accepted_at: newest.accepted_at, ask: newest.request.ask } : null;
+    return newest ? newestRow(newest) : null;
+  }
+
+  /** The newest Run that is a turn of the study: past any independent recomputation (`request.review`, v6.3), which shows
+   * and saves nothing of a turn. Parents still chain onto `projectNewestRun`: the true head. */
+  async projectNewestWriterRun(projectId, signal = undefined) {
+    const page = await this.projectHistory(projectId, { limit: 25, signal });
+    const row = page.runs.find(run => !run.request.review);
+    return row ? newestRow(row) : null;
   }
 
   async projectHistory(projectId, { limit = 25, before, signal } = {}) {

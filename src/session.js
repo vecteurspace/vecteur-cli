@@ -27,7 +27,7 @@ export class Session extends EventEmitter {
     this.cwd = cwd; this.env = env; this.noBrowser = noBrowser; this.clientFactory = clientFactory;
     this.origin = resolveOrigin(env, undefined, origin);
     this.status = "Starting"; this.draft = ""; this.project = null; this.run = null; this.binding = null;
-    this.attachments = []; this.model = null; this.closed = false; this.busy = false;
+    this.attachments = []; this.model = null; this.depth = null; this.closed = false; this.busy = false;
     this.followController = null; this.prompt = null; this.generation = 0;
     this.lifecycle = new AbortController();
     this.offline = offline; this.loginGeneration = 0; this.promptGeneration = 0;
@@ -220,7 +220,7 @@ export class Session extends EventEmitter {
     if (previousAccount && previousAccount !== account.id && !(unsigned && transferUnsigned)) {
       clearTimeout(this.draftTimer); this.registry?.saveDraft(this.draft); this.draft = "";
       this.followController?.abort(); this.generation++; this.run = null; this.project = null; this.binding = null; this.attachments = [];
-      this.model = null; this.projectName = null; this.lastPrintedRun = null;
+      this.model = null; this.depth = null; this.projectName = null; this.lastPrintedRun = null;
     }
     this.account = account;
     this.activeCredential = { kind: this.env.VECTEUR_TOKEN ? 'environment' : 'stored', token };
@@ -275,10 +275,16 @@ export class Session extends EventEmitter {
     await this.loadNewest();
   }
 
+  /** The newest turn of the study: a recomputation run after it shows and saves nothing of its own (parents use the true head). */
+  async newestTurn(projectId) {
+    const newest = await this.client.projectNewestRun(projectId);
+    return newest?.review ? this.client.projectNewestWriterRun(projectId) : newest;
+  }
+
   async loadNewest() {
     if (this.project) {
       this.followController?.abort(); const generation = ++this.generation;
-      const newest = await this.client.projectNewestRun(this.project.id);
+      const newest = await this.newestTurn(this.project.id);
       if (this.closed || generation !== this.generation) return;
       if (newest) {
         this.run = { ...newest, open: !newest.terminal };
@@ -436,7 +442,7 @@ export class Session extends EventEmitter {
           || a.source_handle.acquisition_ref.localeCompare(b.source_handle.acquisition_ref));
         const body = { ask: text, attachments: selections.map(item => item.source_handle),
           parent_state_hash: newest?.state_hash ?? null, ui_context: { layout: 'folder' },
-          ...(selections.length ? { selections } : {}), ...(this.model ? { model_choice: this.model } : {}) };
+          ...(selections.length ? { selections } : {}), ...(this.model ? { model_choice: this.model } : {}), ...(this.depth ? { depth: this.depth } : {}) };
         return this.admitPendingLocked(this.registry.reserveRun(project.id, body, draftRef));
       }, this.env);
       void this.follow().catch(error => this.report(error));
@@ -711,7 +717,7 @@ export class Session extends EventEmitter {
     if (!this.account || !this.project || !this.run?.terminal || this.project.role === 'VIEWER') return;
     try { qualify(); } catch (e) { if (number) throw e; return; }
     const run = this.run, project = this.project;
-    if ((await this.client.projectNewestRun(project.id))?.run_id !== run.run_id) return;
+    if ((await this.newestTurn(project.id))?.run_id !== run.run_id) return;
     if (this.project !== project || this.run !== run) throw new CliError('grant_changed','Save destination changed');
     const grant = currentGrant(this.localPin(), this.env);
     const provisional = grant ?? { ...this.localPin(), generation: null };
@@ -802,7 +808,7 @@ export class Session extends EventEmitter {
       try {
         const writer=row.proposalPath?writeProposalConfined:writeNewConfined;
         const fetch=row.bytes?async sink=>{sink(row.bytes);return {bytes:row.bytes.length,content_type:ARTIFACT_MEDIA_TYPES[artifact.kind]};}:sink=>this.client.artifactGet(artifact.cas_ref,project.id,sink);
-        const saved = await writer(live, artifact.path, fetch, { ...artifact, runId:proposal.runId }, {env:this.env,pin:()=>this.localPin(),head:id=>this.client.projectNewestRun(id),approval:{rel:artifact.path,exists:row.snapshot.exists,sha256:row.snapshot.sha256}});
+        const saved = await writer(live, artifact.path, fetch, { ...artifact, runId:proposal.runId }, {env:this.env,pin:()=>this.localPin(),head:id=>this.newestTurn(id),approval:{rel:artifact.path,exists:row.snapshot.exists,sha256:row.snapshot.sha256}});
         this.message(terminalText(`Saved ${relative(this.cwd,saved.path)} (${saved.bytes} B)`));
         if(row.proposalPath)this.message(terminalText(adoptionHint(relative(this.cwd,saved.path),artifact.path)));
         row.written=true;selected.delete(row);
@@ -904,7 +910,14 @@ export class Session extends EventEmitter {
   }
 
   modeDetails() {
-    return `Execution: Vecteur cloud\nPayer: Project organization ${this.account?.org_id ?? "(sign in first)"}\nNext model: ${this.view().model}\nLast Run model: ${this.run?.requested_route_id || "not known"}`;
+    return `Execution: Vecteur cloud\nPayer: Project organization ${this.account?.org_id ?? "(sign in first)"}\nNext model: ${this.view().model}\nDeep engineering: ${this.depth === "quick" ? "off (quick)" : this.depth === "deep" ? "on" : "plan default (on with Pro)"}\nLast Run model: ${this.run?.requested_route_id || "not known"}`;
+  }
+
+  /** v6.2 deep engineering (D-252): the plan's default (deep with Pro, quick on Free) until /deep switches it; then it
+   *  alternates quick and deep. The server refuses deep on Free (deep_unentitled) with the upgrade it names. */
+  toggleDeep() {
+    this.depth = this.depth === "quick" ? "deep" : "quick";
+    this.message(this.depth === "quick" ? "Deep engineering off: the next Runs are quick." : "Deep engineering on for the next Runs (Pro): simulates the dated period, gives ranges and a second method; up to about 45 minutes and a higher cost.");
   }
 
   statusDetails() {

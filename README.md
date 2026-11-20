@@ -176,6 +176,7 @@ Bare invocation in a pipe or CI keeps the previous status output; `vecteur statu
   `/unlink` removes that association for this subtree and preserves the draft. `/name` renames
   the current Project or names the one created on first send. `/history` loads older Runs on demand.
 - `/model` selects the next Run's model from the product's model choices (Auto is the default).
+- `/deep` turns deep engineering off (quick Runs) or back on; with Pro deep is the default, on Free the server refuses it and names the upgrade.
   `/mode` explains model, execution location and payer. Runs execute in Vecteur cloud.
 - `@` completes local paths. A whole filename in your ask offers attachment after local
   checks (at most three offers; ambiguous basenames list choices).

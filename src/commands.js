@@ -37,6 +37,7 @@ add("drafts", "Recover a saved draft", s => s.recoverDraft());
 add("clear", "Clear this draft; Ctrl+_ restores the edit", s => { s.lastClearedDraft = s.draft; s.setDraft(""); });
 add("mode", "Model, execution location and payer", s => s.message(s.modeDetails()));
 add("model", "Choose the next Run's model", s => s.modelChoice(), { requires: "login" });
+add("deep", "Deep engineering off or on for the next Runs (on by default with Pro)", s => s.toggleDeep(), { requires: "login" });
 add("usage", "Read the Project's server-authored usage", async s => {
   if (!s.project) throw new CliError("project_unavailable", "Choose a Project first with /project");
   const client = s.client, project = s.project;

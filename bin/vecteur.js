@@ -283,7 +283,7 @@ async function logout(command, env = process.env) {
 }
 
 function renderAccount(account, origin) {
-  return `${account.display_name} <${account.email}> (${account.id}) at ${origin}\n`;
+  return `${account.display_name} <${account.email}> (${account.id}) at ${origin} in ${account.organization_name}\n`;
 }
 
 async function whoami(command, env = process.env) {

@@ -2,7 +2,7 @@
   "files": {
     ".github/workflows/release.yml": {
       "mode": 420,
-      "sha256": "21b2b3ee05013fbe2b2d9c7a8639568191d64893457841bb0504ffc4856e0a4f"
+      "sha256": "00c5579529c43e5d6618f9293f16dad217bb9fe9e773a3a9ae993ea8d9823b03"
     },
     ".release/verify.py": {
       "mode": 420,
@@ -10,15 +10,15 @@
     },
     "README.md": {
       "mode": 420,
-      "sha256": "f669c4f4c9d513f0d69c9b12a24b5628ede0a88d83975a6be7eff1cd63a11e46"
+      "sha256": "40dd8350337c52da71d4e83d7d226012f17d82656c9bb4b39ec8363614d38edc"
     },
     "bin/vecteur.js": {
       "mode": 493,
-      "sha256": "6eb8875e2c03499ce65b4fed660c5348eaa0a54b962c49cc7f78d148aedf87a5"
+      "sha256": "aa1c94b3581211d48f7cb53e4f62a3d64d0f568eb26e75e85db4fd6cdf75136d"
     },
     "package.json": {
       "mode": 420,
-      "sha256": "5f2096c0e1ad9e15a92047482191be50efe42f2dc0d0bcb8e00a2c9c4cad0749"
+      "sha256": "d8da95a37f6de4f48bbb28253c9db595d2bd0dc08d6801b960bd74b0e6e407cf"
     },
     "src/blocks.js": {
       "mode": 420,
@@ -30,15 +30,15 @@
     },
     "src/client.js": {
       "mode": 420,
-      "sha256": "e27657f644e42a700e2c615a6c6a3686bcd37ad014f297ccbccbec782fbdcda4"
+      "sha256": "4ec5b8bf1a76db50d3127feb26c4e1c3501ee72e42162745064e1c5066df023c"
     },
     "src/commands.js": {
       "mode": 420,
-      "sha256": "6f75fb82f5c2c8cabc02b749e9f1655200457314e2413f6ca4c5f39c9b8191cc"
+      "sha256": "4c9598997e27947231a50670b371640939bcb83e0ebc28a5bd827c55164bb7c5"
     },
     "src/contract.js": {
       "mode": 420,
-      "sha256": "2a36fde53105dd1f90e2670e9cba63e29030c129ad7c6c5a9efbb9a67a6d5a88"
+      "sha256": "e472f279a0651f53dd316485f554a371588981a89a89aabafa06c9cdf98b881b"
     },
     "src/credentials.js": {
       "mode": 420,
@@ -94,7 +94,7 @@
     },
     "src/session.js": {
       "mode": 420,
-      "sha256": "46fc416f8c6bcc4fee615f86b92f8d841ac1af199bc01d4e5ad53030e696c0c1"
+      "sha256": "461886b241f046374467925b54822b165424493aaddb9be5aa868d509cf7227e"
     },
     "src/stop-words.js": {
       "mode": 420,
@@ -127,13 +127,13 @@
   },
   "release": {
     "cli": {
-      "contract_identity": "api-sha256:bea0597dcb6e7e6d576ec53de9016f64c710b6787a0cfa7bcb7c6fe27e73989f;run-wire-sha256:678602fd4f1dba0493ad0f860be24bbf88532945edfe9dbe1555e5145bbbeefb",
-      "integrity": "sha512-B/suVCJnhxOOUX/kzMx5ecOIrXpCCmJBzzkWCKr2z6rQ2uOvy7IlIYTnneK8pb0JFpJApfo+u5lpxMSqNIFK5w==",
+      "contract_identity": "api-sha256:564c71ca9ba66818306f5b97e82ae834a7d50e5dcf91a9a9de52c5fdb680b8c9;run-wire-sha256:66a605fada495e69ada6498523e5725082ce6d803f2336f7fb69c9b719acfcad",
+      "integrity": "sha512-NkvPrZoWFnlKztVyFmhVFgpk3136ndyZZBL+t4HR622l77OTgldpLjYU6bhwaWR6RKea6cetSa7VsVDMig4yyA==",
       "package": "@vecteur/cli",
-      "version": "0.13.1"
+      "version": "0.15.2"
     },
     "schema": "release-cli.v1",
-    "tag": "v6.1.0"
+    "tag": "v6.4.0"
   },
   "tracked": [
     ".github/workflows/release.yml",
