@@ -6,7 +6,7 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import * as z from "zod/v4";
 
 import { CliError, OWNER_WORDED, VecteurClient, redact } from "./client.js";
-import { EVENT_KINDS, STORED_WIRE_VERSIONS, TERMINAL_STATES } from "./contract.js";
+import { EVENT_KINDS, MODEL_CHOICES, STORED_WIRE_VERSIONS, TERMINAL_STATES } from "./contract.js";
 import { canonicalJson, fillPrompt } from "./format.js";
 import { artifactToFolder, materialAttach } from "./exchange.js";
 import { credentialsPath } from "./credentials.js";
@@ -238,6 +238,11 @@ export async function createVecteurMcpServer(client = new VecteurClient(), shutd
         origin, projectId, cas_ref: handle.cas_ref, acquisition_ref: handle.acquisition_ref, nonce: randomUUID() }; });
       return result;
     });
+
+  tool(server, "vecteur_model_list", "List model choices in the Vecteur catalogue. MCP Runs use the service and organization default.",
+    z.object({}).strict(), z.object({ models: z.array(z.object({
+      route_id: z.string(), label: z.string(), level: z.string(),
+    }).strict()) }).strict(), () => ({ models: MODEL_CHOICES.filter(row => !row.hidden) }));
 
   tool(server, "vecteur_workflow_list", "List the guided workflows (also served as this server's prompts): what to bring, what you get, and the ask with its {{blanks}}. Fill every blank, then send it with vecteur_run_submit.",
     z.object({}).strict(), workflowListOutput, (_input, context) => client.workflows(signal(context)));

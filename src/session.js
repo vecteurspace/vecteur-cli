@@ -903,7 +903,7 @@ export class Session extends EventEmitter {
   modelChoice() { return this.transition(() => this.selectModel()); }
 
   async selectModel() {
-    this.model = await this.choose("Model for the next Run (Vecteur billing)", MODEL_CHOICES.map(row => ({
+    this.model = await this.choose("Model for the next Run (Vecteur billing)", MODEL_CHOICES.filter(row => !row.hidden).map(row => ({
       label: row.route_id === "auto" ? "Auto — Vecteur selects the model" : `${row.label} · ${row.level}`,
       value: row.route_id === "auto" ? null : row.route_id })));
     this.change();

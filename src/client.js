@@ -7,7 +7,7 @@ import {
   ARTIFACT_MEDIA_TYPES, OWNER_CONTRACT_IDENTITY, RECOVERY_ACTIONS, STORED_WIRE_VERSIONS, STORED_WIRE_VERSION_HEADER,
   WIRE_READER_HEADER, WIRE_READER_VERSION, validateAccount, validateCliRelease, validateCustomerCostProjection,
   validateDeviceAuthorization, validateLimitDenial, validatePatCreated, validateProject, validateQuotaDenial,
-  validateRunAck, validateRunStopOffer, validateSource, validateSourceOffer,
+  validateRunAck, validateRunStopOffer, validateSource, validateSourceOffer, validateStorageDenial, validateStorageUsage,
 } from "./contract.js";
 import { FIRST_EVENT_SEQ, isStateHash, validateEvent, validateRun } from "./wire.js";
 import { credentialsPath, readCredentials } from "./credentials.js";
@@ -408,6 +408,13 @@ export class VecteurClient {
               ownerMessage = `${error.message}; ${quota.current} of ${quota.maximum} active projects used on the ${quota.tier} plan`
                 + (actions.length ? `; next: ${actions.join("; ")}` : "");
             }
+            if (candidate === "storage_exhausted") {
+              if (!validateStorageDenial(error.storage) || typeof error.message !== "string"
+                  || !error.message.length || /[\u0000-\u001f\u007f-\u009f]/.test(error.message)) {
+                throw new CliError("storage_invalid", "Server returned malformed storage refusal");
+              }
+              ownerMessage = [error.message, ...error.storage.usage.actions.map(action => action.label)].join(". ");
+            }
             if (candidate === "customer_cost_exhausted") {
               if (!validateLimitDenial(error.limit)) {
                 throw new CliError("customer_cost_invalid", "Server returned malformed customer-cost refusal");
@@ -450,7 +457,7 @@ export class VecteurClient {
         } catch (error) {
           if (error?.name === "AbortError") throw error;
           if (error instanceof CliError && [
-            "secret_response_refused", "quota_invalid", "recovery_action_invalid", "customer_cost_invalid",
+            "secret_response_refused", "quota_invalid", "recovery_action_invalid", "customer_cost_invalid", "storage_invalid",
           ].includes(error.code)) refused = error;
         }
         if (refused) throw refused;
@@ -475,6 +482,14 @@ export class VecteurClient {
       throw new CliError("request_failed",
         `origin ${this.config.origin}; cause=transport; next: check the network and --origin`);
     }
+  }
+
+  async storageUsage() {
+    const value = await this.#json("GET", "/api/storage/usage");
+    if (!validateStorageUsage(value)) {
+      throw new CliError("storage_invalid", "Server returned malformed storage usage");
+    }
+    return value;
   }
 
   async projectList(signal = undefined) {

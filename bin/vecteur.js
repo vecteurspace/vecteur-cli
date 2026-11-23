@@ -387,9 +387,11 @@ async function main() {
   let value;
   let renderOptions = {};
   if (command.kind === "project_list") {
-    const [account, projects] = await Promise.all([client.accountMe(), client.projectList()]);
+    const [account, projects, storage] = await Promise.all([
+      client.accountMe(), client.projectList(), client.storageUsage(),
+    ]);
     value = { projects, active_projects: account.entitlements.active_projects,
-      selected_project_id: config.projectId ?? null };
+      selected_project_id: config.projectId ?? null, storage };
     process.stdout.write(command.json ? canonicalJson(value) : humanProjects(value));
     return;
   } else if (command.kind === "project_create") {

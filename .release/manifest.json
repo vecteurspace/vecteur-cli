@@ -2,7 +2,7 @@
   "files": {
     ".github/workflows/release.yml": {
       "mode": 420,
-      "sha256": "00c5579529c43e5d6618f9293f16dad217bb9fe9e773a3a9ae993ea8d9823b03"
+      "sha256": "85ba4dee790b436519bf2e21ed860142dcbe76066d8e6f9027ec44ab314e69e4"
     },
     ".release/verify.py": {
       "mode": 420,
@@ -14,11 +14,11 @@
     },
     "bin/vecteur.js": {
       "mode": 493,
-      "sha256": "aa1c94b3581211d48f7cb53e4f62a3d64d0f568eb26e75e85db4fd6cdf75136d"
+      "sha256": "51ea3601db6d9a5d1e125c12c9d78e0ad6d556fc5f13cf72fee6d4a732763e9e"
     },
     "package.json": {
       "mode": 420,
-      "sha256": "d8da95a37f6de4f48bbb28253c9db595d2bd0dc08d6801b960bd74b0e6e407cf"
+      "sha256": "ec69ef43b8773834337fd900fa88ba6309a8dc4de4b1248e14a10fd3c1791850"
     },
     "src/blocks.js": {
       "mode": 420,
@@ -30,7 +30,7 @@
     },
     "src/client.js": {
       "mode": 420,
-      "sha256": "4ec5b8bf1a76db50d3127feb26c4e1c3501ee72e42162745064e1c5066df023c"
+      "sha256": "4518dd4e1bd2d4eecba9f1711ba1ac1f413b49e12858f2a4615ebd8a8f7935a2"
     },
     "src/commands.js": {
       "mode": 420,
@@ -38,7 +38,7 @@
     },
     "src/contract.js": {
       "mode": 420,
-      "sha256": "e472f279a0651f53dd316485f554a371588981a89a89aabafa06c9cdf98b881b"
+      "sha256": "10079c3c6abab3b91fa8ae367e12d2be4a73a36c79f056a0b7364917b24c75aa"
     },
     "src/credentials.js": {
       "mode": 420,
@@ -82,7 +82,7 @@
     },
     "src/mcp.js": {
       "mode": 420,
-      "sha256": "26ddd9b41d3800c7f4b61ff4ab07c6091eca42ec2eceb324cb28781e7330d439"
+      "sha256": "acc5dd8ddb2c6a91732810ae84c6d0574397c1c9ca18f57370ad9e15bbd6f318"
     },
     "src/preferences.js": {
       "mode": 420,
@@ -90,11 +90,11 @@
     },
     "src/projects.js": {
       "mode": 420,
-      "sha256": "c975d200cc319c2f8d0a75048dc99347ae723aa9b06c17975f611e37f648269e"
+      "sha256": "62b4341a05b69a77336ea934dd606ca050e5f0042aacd8f606286599957298ee"
     },
     "src/session.js": {
       "mode": 420,
-      "sha256": "461886b241f046374467925b54822b165424493aaddb9be5aa868d509cf7227e"
+      "sha256": "31ee31601a4a6974b1b0d7af129f791b8fd8dd966e51da5045406186b4870205"
     },
     "src/stop-words.js": {
       "mode": 420,
@@ -127,13 +127,13 @@
   },
   "release": {
     "cli": {
-      "contract_identity": "api-sha256:564c71ca9ba66818306f5b97e82ae834a7d50e5dcf91a9a9de52c5fdb680b8c9;run-wire-sha256:66a605fada495e69ada6498523e5725082ce6d803f2336f7fb69c9b719acfcad",
-      "integrity": "sha512-NkvPrZoWFnlKztVyFmhVFgpk3136ndyZZBL+t4HR622l77OTgldpLjYU6bhwaWR6RKea6cetSa7VsVDMig4yyA==",
+      "contract_identity": "api-sha256:c23dad4f150e6ad870161c328ab599766d8d234b6d18ff7fa3a480c197af9ac4;run-wire-sha256:5f02687e884369a37c8a133cdadaba44ec5854b2365ffb0cc56655bf4299e84f",
+      "integrity": "sha512-eGVyke2kEjo2tEGQV3MusbMivpK7Au6NUateHf7b7W8UnS+JfdPbuWJTo7kNZlmdZ4Dx8Zngfvt5rgpxIrbe7A==",
       "package": "@vecteur/cli",
-      "version": "0.15.2"
+      "version": "0.15.4"
     },
     "schema": "release-cli.v1",
-    "tag": "v6.4.0"
+    "tag": "v6.7.0"
   },
   "tracked": [
     ".github/workflows/release.yml",

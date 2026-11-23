@@ -1,3 +1,4 @@
+import { STORAGE_GB } from "./contract.js";
 import { CliError } from "./errors.js";
 
 /** Resolve only server-authorized objects. Ids take precedence over names. */
@@ -38,5 +39,11 @@ export function humanProjects(value) {
   const rows = value.projects.map(project =>
     `${project.id === value.selected_project_id ? "*" : " "} ${project.name} (${project.id}) ${project.role}`);
   const allowance = value.active_projects;
-  return [...rows, `Active projects: ${allowance.current} / ${allowance.maximum ?? "Contract limit"}`].join("\n") + "\n";
+  const summary = value.storage.state === "unavailable" ? "Storage figure unavailable"
+    : `Storage: ${storageBytes(value.storage.projects.reduce((sum, project) => sum + project.working_bytes + project.object_bytes, 0))} in visible projects · ${value.storage.state}`;
+  return [...rows, `Active projects: ${allowance.current} / ${allowance.maximum ?? "Contract limit"}`, summary].join("\n") + "\n";
+}
+
+function storageBytes(bytes) {
+  return bytes < STORAGE_GB ? `${bytes} B` : `${Number((bytes / STORAGE_GB).toFixed(2))} GB`;
 }
