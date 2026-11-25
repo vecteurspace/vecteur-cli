@@ -12,7 +12,7 @@ import { credentialsPath, readCredentials } from './credentials.js';
 import { readStore, writeStore } from './store.js';
 import { CliError } from './errors.js';
 import { ARTIFACT_MEDIA_TYPES } from './contract.js';
-import { MEDIA, selectSource } from './exchange.js';
+import { attachmentName, TEXT_MEDIA, scanNormalized, scanString, selectSource } from './exchange.js';
 
 export const MAX_SELECT_BYTES = 8 * 1024 * 1024;
 const MAX_ARTIFACT = 64 * 1024 * 1024;
@@ -351,8 +351,6 @@ export function selectionMetadata(root, rel, env = process.env, { ifPresent = fa
     return { rel: p.join('/'), size: info.size, ...inode(info) };
   } finally { closeChain(chain); }
 }
-const SECRET = /vct_[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36,}|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\./;
-function scanString(text) { if (SECRET.test(text)) fail('secret_suspected', 'Credential-shaped content refused; nothing uploaded'); }
 function textDecode(bytes) {
   let encoding = 'utf-8', data = bytes;
   // A BOM selects the sole decoder. Unmarked input must be strict UTF-8.
@@ -362,16 +360,12 @@ function textDecode(bytes) {
   try { return new TextDecoder(encoding, { fatal: true }).decode(data); }
   catch { fail('scan_unsupported'); }
 }
-// Include invisible marks such as variation selectors and the combining grapheme joiner.
-const withoutControls = text => text.replace(/[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, c => /[\t\r\n]/.test(c) ? c : '');
-const scanNormalized = text => { scanString(text); scanString(withoutControls(text)); };
 function scanText(bytes) {
   scanString(bytes.toString('latin1'));
   const text = textDecode(bytes); scanNormalized(text);
   if (/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)) fail('scan_unsupported');
 }
-const TEXT_UPLOAD_EXTENSIONS = new Set(['.txt', '.md', '.csv', '.json',
-  '.py', '.m', '.jl', '.r', '.c', '.h', '.cpp', '.f90', '.toml', '.yaml', '.yml', '.ini', '.cfg', '.tex', '.rst']);
+const TEXT_UPLOAD_EXTENSIONS = new Set(Object.keys(TEXT_MEDIA));
 export function scanContent(bytes, rel = '') {
   try {
     if (bytes.includes(Buffer.from('%PDF-')) || extname(rel).toLowerCase() === '.pdf')
@@ -381,9 +375,9 @@ export function scanContent(bytes, rel = '') {
     if (bytes.includes(Buffer.from([0x50, 0x4b, 0x03, 0x04])) ||
         bytes.length >= 4 && [0x06054b50, 0x08074b50].includes(bytes.readUInt32LE(0)) ||
         ['.docx', '.docm', '.dotx', '.dotm', '.xlsx', '.xlsm', '.xltx', '.xltm', '.xlsb', '.xlam', '.pptx', '.pptm', '.potx', '.potm', '.ppsx', '.ppsm', '.ppam', '.sldx', '.sldm', '.zip'].includes(extension))
-      fail('scan_unsupported', 'Word files cannot be checked for credentials before upload yet; upload it in the web app, or attach a text/CSV/Markdown export');
+      fail('scan_unsupported', 'ZIP and Office files require a credential scan the CLI cannot perform. Use the web app or attach a text/CSV/Markdown export.');
     scanString(bytes.toString('latin1'));
-    if (!TEXT_UPLOAD_EXTENSIONS.has(extension)) fail('scan_unsupported', 'Local file uploads require a text/CSV/Markdown export or a supported code/configuration text file');
+    if (!TEXT_UPLOAD_EXTENSIONS.has(extension)) fail('scan_unsupported', 'Local file uploads require a supported text format. See the CLI README for extensions.');
     scanText(bytes);
   } catch (e) { if (e instanceof CliError) throw e; fail('scan_unsupported'); }
 }
@@ -404,7 +398,7 @@ export function readConfined(grant, rel, env = process.env, { selected, hook = (
     const bytes = readBounded(fd,info.size), after = fstat(fd);
     if (bytes.length !== info.size || after.size !== info.size || after.mtimeNs !== info.mtimeNs || after.ctimeNs !== info.ctimeNs) fail('attachment_changed');
     hook('read', chain); pathCheck(chain); allowed(grant, rel, env); scanContent(bytes, rel);
-    return { rel, bytes, sha256: hash(bytes), size: bytes.length, mtime_ms: after.mtimeMs, media: MEDIA[extname(rel).toLowerCase()] ?? 'text/plain' };
+    return { rel, bytes, sha256: hash(bytes), size: bytes.length, mtime_ms: after.mtimeMs, media: TEXT_MEDIA[extname(rel).toLowerCase()] ?? 'text/plain' };
   } finally { closeChain(chain); }
 }
 /** Explicit --attach consent lasts only for this call, for these paths and this authenticated destination.
@@ -427,14 +421,14 @@ export async function selectInvocationFiles(client, projectId, paths, { cwd = pr
     if (!same(rootIdentity(grant.root.path), grant.root)) fail('folder_replaced');
   };
   check();
-  const files = explicit.map(rel => readConfined(grant, rel, env));
+  const files = explicit.map(rel => ({ ...readConfined(grant, rel, env), sourceName: attachmentName(rel) }));
   if (files.reduce((n, file) => n + file.size, 0) > 32 * 1024 * 1024) fail('attachment_invalid', 'Selection exceeds 32 MiB');
   const selections = [];
   for (const file of files) {
     check();
     const current = readConfined(grant, file.rel, env);
     if (current.sha256 !== file.sha256) fail('attachment_changed');
-    const source = await client.inputAdd(projectId, current.bytes, current.media, signal);
+    const source = await client.inputAdd(projectId, current.bytes, current.media, { sourceName: file.sourceName, signal });
     check();
     selections.push(await selectSource(client, projectId, source, signal));
   }

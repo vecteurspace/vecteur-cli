@@ -80,7 +80,7 @@ downloads use the Project-scoped admitted CAS route, verify the declared length,
 SHA-256, and refuse to overwrite a local path. Use `--project ID` when no Project is selected.
 
 `vecteur mcp` serves MCP over stdio using the same credentials and public client. It exposes
-`vecteur_project_get`, `vecteur_run_submit`, `vecteur_run_get`, `vecteur_run_events`, `vecteur_artifact_get` (digest-verified download into the working folder, never overwrites) and `vecteur_material_attach` (uploads one file from the working folder after you confirm the origin and the Project head; refuses read-only, foreign or moved-on Projects).
+`vecteur_project_get`, `vecteur_run_submit`, `vecteur_run_get`, `vecteur_run_events`, `vecteur_artifact_get` (digest-verified download into the working folder, never overwrites) and `vecteur_material_attach` (uploads one file and its cleaned base name from the working folder after you confirm the origin and the Project head; refuses read-only, foreign or moved-on Projects).
 Pass material_attach's returned `selections` verbatim to `vecteur_run_submit` or `vecteur_run_start` for that Project. For multiple files, concatenate their `selections` arrays. These select the same extracts as CLI `--attach`; upload alone does not admit material to a Run. Omitting that Project's pending material in the same MCP session refuses with `selection_required` before admission; pending material in another Project does not block it. To deliberately abandon pending material, pass the optional boolean `discard_pending_material: true` to submit or start: it clears only that Project's pending tracking before admission and uses the supplied selections, or none if omitted. The discard remains effective if admission refuses; it does not delete uploaded files. Omitting the flag or passing `false` retains the guard. A file with no selectable extracts refuses with `extraction_unavailable`.
 It also exposes `vecteur_run_start` and `vecteur_run_status` for long Runs. `vecteur_artifact_get`
 takes a `cas_ref`, or a `run_id` with the file's `artifact_path`. `vecteur_run_submit` blocks and is suitable only for short asks.
@@ -137,8 +137,8 @@ It replaces inherited sources. The invocation grant is never persisted and does 
 folder binding or saved Project selection. Paths must be inside the working folder; the same
 Linux/Node qualification, exclusions, no-symlink reader, secret scan, eight-file, 8 MiB/file and
 32 MiB total limits as interactive selection apply. All extracts are selected. An unsafe member
-of the initial set refuses before any file uploads. Neither filenames nor local paths enter
-the admission/upload bodies. `--attach` applies only to `run submit --no-wait`.
+of the initial set refuses before any file uploads. Vecteur receives the bytes and the cleaned base
+name of each selected file. `--attach` applies only to `run submit --no-wait`.
 
 With explicit `--parent H|none`, the CLI writes the exact admission body (ask, parent, source
 handles and selections) before dispatch, in a no-overwrite 0600 `request-<key-digest>.json` file
@@ -191,8 +191,9 @@ Bare invocation in a pipe or CI keeps the previous status output; `vecteur statu
   First send asks for `select` and `save-new` permission, naming the folder, Project and origin.
   Send-first and save cards print their full disclosure and every file's selection state to
   scrollback once on opening; a short question and its choices stay live.
-  Nothing leaves this computer unless you confirm it. Selected content uploads to Vecteur cloud
-  and the Run's model provider route; local residency is not guaranteed. The composer states
+  Your confirmation is required before selected files leave this computer. Vecteur receives the
+  files and their cleaned base names. The names and opened content reach the Run's model provider
+  route. Processing can take place outside this machine. The composer states
   the upload destination. Declining keeps the draft and selections and reads no selected content.
   Up to eight files, **8 MiB each** (reduced from 16 MiB) and 32 MiB total; all available extracts
   are selected. `/clear-files` removes pending selections. A retry of an admitted upload uses
@@ -268,7 +269,8 @@ discovery is unavailable, the CLI says so and a plain ask still submits without 
 Global `core.excludesFile` is not read. Symlinks, hardlinks, devices, FIFOs, path escapes and detected folder moves refuse.
 Local file authority uploads only strict UTF-8 (with or without BOM) or UTF-16LE/BE text
 with a BOM, with these extensions:
-`.txt`, `.md`, `.csv`, `.json`, `.py`, `.m`, `.jl`, `.r`, `.c`, `.h`, `.cpp`, `.f90`,
+`.txt`, `.md`, `.csv`, `.json`, `.oem`, `.e`, `.tle`, `.tdm`, `.sp3`, `.czml`, `.xml`,
+`.py`, `.m`, `.jl`, `.r`, `.c`, `.h`, `.cpp`, `.f90`,
 `.toml`, `.yaml`, `.yml`, `.ini`, `.cfg`, `.tex`, `.rst` (case-insensitive).
 A BOM selects exactly its declared encoding; invalid text refuses `scan_unsupported`.
 Without a BOM, only strict UTF-8 is decoded: no encoding heuristics or fallback are used.
@@ -278,13 +280,16 @@ Credential shapes are scanned in raw bytes and in a copy of the decoded text wit
 
 **PDF is refused in this slice** (`scan_unsupported`), by `.pdf` extension or `%PDF-` content
 signature anywhere in the file, including after a preamble and under another filename.
-**DOCX and ZIP/OOXML containers are refused** (`scan_unsupported`), by extension or ZIP content
+**DOCX, XLSX, IDM-CIC archives and other ZIP containers are refused** (`scan_unsupported`), by extension or ZIP content
 signature (`PK\x03\x04` anywhere in the file), including under a `.txt` filename. Their reading
 order cannot yet be checked reliably for credentials before upload. Upload Word/PDF files in
-the web app, or attach a text/CSV/Markdown export. No ZIP/XML document scanner is used.
+the web app, or attach a text export. The CLI scans XML as text and leaves ZIP containers closed.
 Other extensions, invalid text encodings and uninspectable binary representations also refuse.
 False positives refuse. This is a bounded representation/pattern check, not a guarantee that every
-secret can be recognized. No local filename or absolute path is added to an upload body.
+secret can be recognized. The upload removes control characters, limits the base name to 200 UTF-8
+bytes and percent-encodes it in `X-Source-Name`. The CLI applies the credential patterns to the
+name and refuses a match, including names that match by chance. Rename the file if that happens.
+The same filename check applies to MCP uploads.
 
 `local-grants.json` records permission generations and pending consent metadata; `local-writes.json`
 records upload evidence, save intents, proposal-to-original/CAS mappings, per-path baseline hashes
@@ -301,8 +306,7 @@ Exact baseline bytes are retained privately in `local-bases/<sha256>` beside the
 0600, up to 8 MiB per file and 256 MiB total; oldest snapshots are evicted first. Reads verify the
 digest. If a snapshot is evicted, missing or corrupt, hash-based conflict status remains and the
 display says the base diff is unavailable. Edited proposal files are never used to reconstruct a
-baseline. The code/text extensions `.py .m .jl .r .c .h .cpp .f90 .toml .yaml .yml .ini .cfg .tex .rst`
-upload as `text/plain`, with the same strict content scan. Extract-based upload does not establish
+baseline. Engineering, code and configuration text uploads use the same strict content scan. Extract-based upload does not establish
 whole-file model fidelity: fixture J3 runs prove delivery and user adoption mechanically; model-quality
 J3 remains UNKNOWN until the installed literal model run.
 

@@ -50,6 +50,7 @@ function helpText(version) {
   update [--check] [--yes] [--origin <url>] updates the executing installation
   run submit continues the Project's current head; --parent <state-hash> admits it only if that is still the head
   run submit --no-wait --request-key K [--parent H|none] [--attach PATH…] -p ID -a ASK --json
+  --attach uploads selected files and their cleaned base names.
   Claude Code/Codex recipe: submit --no-wait --parent H --request-key K --attach PATH…; run get / run events; run export
 `;
 }

@@ -8,7 +8,7 @@ import * as z from "zod/v4";
 import { CliError, OWNER_WORDED, VecteurClient, redact } from "./client.js";
 import { EVENT_KINDS, MODEL_CHOICES, STORED_WIRE_VERSIONS, TERMINAL_STATES } from "./contract.js";
 import { canonicalJson, fillPrompt } from "./format.js";
-import { artifactToFolder, materialAttach } from "./exchange.js";
+import { artifactToFolder, materialAttach, SOURCE_NAME_REFUSAL } from "./exchange.js";
 import { credentialsPath } from "./credentials.js";
 import { readStore, withStoreLock, writeStore } from "./store.js";
 
@@ -125,7 +125,8 @@ function failure(error, lifecycle = false) {
     ? error.code : "internal_error";
   // A read-only (v5) Project and a retired door carry the owner's own sentence (validated by the client).
   // So does an ask refused for an unfilled workflow blank (the client kept only the server's sentence naming it).
-  const message = OWNER_WORDED.includes(code) || (code === "field_invalid" && error.message.startsWith("The question still holds an unfilled blank: "))
+  const message = OWNER_WORDED.includes(code) || (code === "secret_suspected" && error.message === SOURCE_NAME_REFUSAL)
+    || (code === "field_invalid" && error.message.startsWith("The question still holds an unfilled blank: "))
     ? { message: error.message } : {};
   const details = Object.fromEntries((lifecycle ? ["run_id", "request_key", "parent_state_hash", "pending"] : ["run_id", "pending"])
     .filter(field => error instanceof CliError && Object.hasOwn(error, field))
@@ -169,8 +170,7 @@ export async function createVecteurMcpServer(client = new VecteurClient(), shutd
     return value;
   };
   const updatePending = change => withStoreLock(file, () => { const value = pendingStore(); change(value.pending); writeStore(file, value); });
-  // One entry per Project and bytes: re-attaching the same file replaces its handle (the recovery after a restart).
-  const materialKey = (projectId, casRef) => canonicalJson([origin, projectId, casRef]);
+  // Identical bytes under different names are distinct acquisitions. An exact re-attach refreshes that entry.
   const withMaterial = async (projectId, selections, discardPendingMaterial, call) => {
     const pending = Object.entries(pendingStore().pending).filter(([, value]) => value.origin === origin && value.projectId === projectId);
     const selected = new Set((selections ?? []).map(value => canonicalJson([value.source_handle.cas_ref, value.source_handle.acquisition_ref])));
@@ -231,11 +231,18 @@ export async function createVecteurMcpServer(client = new VecteurClient(), shutd
       artifactToFolder(client, { projectId, casRef, runId, artifactPath, output, cwd, signal: signal(context) }));
 
   tool(server, "vecteur_material_attach",
-    `Upload one local file to ${client.config.origin}. Pass the returned selections verbatim to vecteur_run_submit or vecteur_run_start for this Project; upload alone is not Run admission. Requires confirm_origin equal to that origin and expected_state_hash equal to the current head (null if none).`,
+    `Upload one local file and its cleaned base name to ${client.config.origin}. Pass the returned selections verbatim to vecteur_run_submit or vecteur_run_start for this Project; upload alone is not Run admission. Requires confirm_origin equal to that origin and expected_state_hash equal to the current head (null if none).`,
     materialInput, materialOutput, async ({ project_id: projectId, path, confirm_origin: confirmOrigin, expected_state_hash: expectedStateHash }, context) => {
       const result = await materialAttach(client, { projectId, path, confirmOrigin, expectedStateHash, cwd, signal: signal(context) });
-      updatePending(store => { for (const { source_handle: handle } of result.selections) store[materialKey(projectId, handle.cas_ref)] = {
-        origin, projectId, cas_ref: handle.cas_ref, acquisition_ref: handle.acquisition_ref, nonce: randomUUID() }; });
+      updatePending(store => {
+        for (const { source_handle: { cas_ref, acquisition_ref } } of result.selections) {
+          // Re-attaching recovers an entry written before named acquisitions.
+          delete store[canonicalJson([origin, projectId, cas_ref])];
+          store[canonicalJson([origin, projectId, cas_ref, acquisition_ref])] = {
+            origin, projectId, cas_ref, acquisition_ref, nonce: randomUUID(),
+          };
+        }
+      });
       return result;
     });
 

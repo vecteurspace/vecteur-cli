@@ -1,6 +1,6 @@
 {
   "name": "@vecteur/cli",
-  "version": "0.15.4",
+  "version": "0.15.5",
   "type": "module",
   "bin": {
     "vecteur": "bin/vecteur.js"

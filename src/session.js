@@ -14,6 +14,7 @@ import { withLocalLock, withAdmissionLock, qualify, currentGrant, createGrant, p
   reconcileWrites, reconcileAdmissions, inspectTarget, observeTargetMetadata, observeTargets, proposals, proposalName, writeProposalConfined, downloadLocalArtifact } from './localfiles.js';
 import { ARTIFACT_MEDIA_TYPES, MODEL_CHOICES } from "./contract.js";
 import { OWNER_WORDED } from "./client.js";
+import { attachmentName } from "./exchange.js";
 import { openBrowser } from "./browser.js";
 
 export const NEW_FOLDER = "New folder — send an ask or /link an existing Project";
@@ -423,14 +424,15 @@ export class Session extends EventEmitter {
           grant = currentGrant(this.localPin(), this.env);
           if (!grant) { if (!consent) throw new CliError('grant_changed', 'Permission changed; confirm files again'); grant = createGrant(this.localPin(), this.env, consent.epoch); }
         }
-        for (const item of this.attachments) {
+        const named = this.attachments.map(item => ({ item, sourceName: attachmentName(item.rel) }));
+        for (const { item, sourceName } of named) {
           checkDestination();
           pinCheck(grant, this.localPin(), this.env);
           if (item.generation !== undefined && item.generation !== grant.generation) throw new CliError('grant_changed', 'Selection withdrawn; select it again');
           const file = readConfined(grant, item.rel, this.env, { selected: item });
           pinCheck(grant, this.localPin(), this.env);
           this.message(`Upload ${file.rel} (${file.size} B) to ${project.name} on ${this.origin}`);
-          item.source = await this.client.inputAdd(project.id, file.bytes, file.media);
+          item.source = await this.client.inputAdd(project.id, file.bytes, file.media, { sourceName });
           checkDestination();
           recordUpload(grant, file, item.source, this.env);
           const offer = item.source.offer ?? await this.client.inputOffer(project.id, item.source);
@@ -546,7 +548,7 @@ export class Session extends EventEmitter {
 
   fileConsentText(destination) {
     const project = destination.id ? destination.name : `a new Project named ${destination.name}`;
-    return `Allow Vecteur to read files you select in ${this.registry.folder.path} and save new files it makes there? Files you select upload to ${project} on ${destination.origin}; their content reaches this Run's model provider route; local residency is not guaranteed.`;
+    return `Allow Vecteur to read files you select in ${this.registry.folder.path} and save new files it makes there? Files you select upload with their cleaned base names to ${project} on ${destination.origin}. The names and opened content reach this Run's model provider route. Processing can take place outside this machine.`;
   }
 
   async confirmFiles(destination) {

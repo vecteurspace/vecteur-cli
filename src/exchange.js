@@ -8,9 +8,42 @@ import { runArtifacts } from "./blocks.js";
 
 // The run door's material cap (backend asgi.MAX_MATERIAL_BYTES): one figure everywhere.
 export const MAX_MATERIAL_BYTES = 16 * 1024 * 1024;
-export const MEDIA = { ".txt": "text/plain", ".md": "text/markdown", ".csv": "text/csv", ".json": "application/json",
-  ...Object.fromEntries(['.py', '.m', '.jl', '.r', '.c', '.h', '.cpp', '.f90', '.toml', '.yaml', '.yml', '.ini', '.cfg', '.tex', '.rst'].map(ext => [ext, 'text/plain'])),
-  ".pdf": "application/pdf", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document" };
+export const TEXT_MEDIA = { ".txt": "text/plain", ".md": "text/markdown", ".csv": "text/csv", ".json": "application/json",
+  ...Object.fromEntries(['.py', '.m', '.jl', '.r', '.c', '.h', '.cpp', '.f90', '.toml', '.yaml', '.yml', '.ini', '.cfg', '.tex', '.rst', '.oem', '.e', '.tle', '.tdm', '.sp3', '.czml', '.xml'].map(ext => [ext, 'text/plain'])) };
+export const MEDIA = { ...TEXT_MEDIA, ".pdf": "application/pdf", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document" };
+
+const SECRET = /vct_[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36,}|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\./;
+export function scanString(text, refusal = "Credential-shaped content refused; nothing uploaded") {
+  if (SECRET.test(text)) throw new CliError("secret_suspected", refusal);
+}
+// Include invisible marks such as variation selectors and the combining grapheme joiner.
+const withoutControls = text => text.replace(/[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, c => /[\t\r\n]/.test(c) ? c : '');
+export function scanNormalized(text, refusal) {
+  scanString(text, refusal);
+  scanString(withoutControls(text), refusal);
+}
+
+export const SOURCE_NAME_REFUSAL = "File name resembles a credential. Rename it before uploading.";
+
+// Match the runner's single segment and 200-byte limit before percent-encoding for the backend.
+export function attachmentName(path) {
+  const localName = basename(path);
+  scanNormalized(localName, SOURCE_NAME_REFUSAL);
+  const name = localName.split("\\").at(-1)
+    .replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}]/gu, "")
+    .replace(/\s+/g, " ").trim().replace(/^\.+/, "").trim();
+  scanNormalized(name, SOURCE_NAME_REFUSAL);
+  if (Buffer.byteLength(name) <= 200) return name;
+
+  const dot = name.lastIndexOf(".");
+  const suffix = dot > 0 ? name.slice(dot) : "";
+  const clip = (text, budget) => new TextDecoder("utf-8").decode(Buffer.from(text).subarray(0, budget), { stream: true }).trimEnd();
+  const budget = 200 - Buffer.byteLength(suffix);
+  const stem = budget > 0 && suffix ? clip(name.slice(0, dot), budget) : "";
+  const bounded = stem ? stem + suffix : clip(name, 200);
+  scanNormalized(bounded, SOURCE_NAME_REFUSAL);
+  return bounded;
+}
 
 const inside = (root, path) => path === root || path.startsWith(root + sep);
 
@@ -62,6 +95,7 @@ export async function materialAttach(client, { projectId, path, confirmOrigin, e
     throw new CliError("project_stale", "Project head moved; read the latest run and retry");
   }
   const filename = await contained(cwd, path, { leaf: false });
+  const sourceName = attachmentName(resolve(cwd, path));
   const handle = await open(filename, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
   let bytes;
   try {
@@ -76,10 +110,10 @@ export async function materialAttach(client, { projectId, path, confirmOrigin, e
     }
   } finally { await handle.close(); }
   const media = MEDIA[extname(filename).toLowerCase()] ?? "application/octet-stream";
-  const source = await client.inputAdd(projectId, bytes, media, signal);
+  const source = await client.inputAdd(projectId, bytes, media, { sourceName, signal });
   const selection = await selectSource(client, projectId, source, signal);
   return {
-    project_id: projectId, project_name: project.name, destination: origin, filename: basename(filename),
+    project_id: projectId, project_name: project.name, destination: origin, filename: sourceName || "attachment",
     bytes: bytes.length, cas_ref: source.cas_ref, acquisition_ref: source.acquisition_ref,
     offer_id: selection.offer_id, extract_count: selection.selected_extract_ids.length, selections: [selection],
   };

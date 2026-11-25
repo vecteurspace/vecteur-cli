@@ -302,7 +302,7 @@ export class VecteurClient {
     this.fetchImpl = fetchImpl;
   }
 
-  async request(method, path, { body, rawBody, contentType, idempotencyKey, accept, acceptEncoding, signal,
+  async request(method, path, { body, rawBody, contentType, sourceName, idempotencyKey, accept, acceptEncoding, signal,
     lastEventId, anonymousReadiness = false } = {}) {
     // Anonymous: no credential and no client identity, for the public reads only (readiness, the workflows).
     if (anonymousReadiness && (method !== "GET" || !["/api/ready", "/api/workflows"].includes(path)
@@ -346,6 +346,7 @@ export class VecteurClient {
           ...(!anonymousReadiness && this.config.token ? { Authorization: `Bearer ${this.config.token}` } : {}),
           ...(body === undefined ? {} : { "Content-Type": "application/json" }),
           ...(rawBody === undefined ? {} : { "Content-Type": contentType ?? "application/octet-stream" }),
+          ...(sourceName ? { "X-Source-Name": encodeURIComponent(sourceName) } : {}),
           ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
           ...(accept ? { Accept: accept } : {}),
           ...(acceptEncoding ? { "Accept-Encoding": acceptEncoding } : {}),
@@ -584,9 +585,9 @@ export class VecteurClient {
     return value;
   }
 
-  async inputAdd(projectId, bytes, contentType, signal = undefined) {
+  async inputAdd(projectId, bytes, contentType, { sourceName, signal } = {}) {
     const value = await this.#json("POST", `/api/projects/${encodeURIComponent(projectId)}/inputs`, {
-      rawBody: bytes, contentType, signal,
+      rawBody: bytes, contentType, sourceName, signal,
     });
     const digest = createHash("sha256").update(bytes).digest("hex");
     if (!validateSource(value) || value.sha256 !== digest || value.cas_ref !== `sha256:${digest}`
